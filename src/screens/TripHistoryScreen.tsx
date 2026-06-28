@@ -176,7 +176,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 20,
     fontWeight: 'bold',
-    color: '#1A1A1A',
+    color: '#1E293B',
   },
   loaderContainer: {
     flex: 1,
@@ -184,7 +184,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   loaderText: {
-    color: '#666666',
+    color: '#64748B',
     fontSize: 14,
     marginTop: 12,
   },
@@ -201,12 +201,12 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#1A1A1A',
+    color: '#1E293B',
     marginBottom: 8,
   },
   emptyDesc: {
     fontSize: 13,
-    color: '#888888',
+    color: '#64748B',
     textAlign: 'center',
     lineHeight: 18,
   },
@@ -215,11 +215,11 @@ const styles = StyleSheet.create({
     paddingBottom: 24,
   },
   tripCard: {
-    backgroundColor: '#F9F9F9',
-    borderRadius: 16,
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
     padding: 16,
-    borderWidth: 1,
-    borderColor: '#F0F0F0',
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
     marginBottom: 12,
   },
   cardTopRow: {
@@ -230,29 +230,29 @@ const styles = StyleSheet.create({
   tripName: {
     fontSize: 16,
     fontWeight: 'bold',
-    color: '#1A1A1A',
+    color: '#1E293B',
     flex: 1,
     marginRight: 8,
   },
   completedBadge: {
-    backgroundColor: '#E8F5E9',
+    backgroundColor: 'rgba(16, 185, 129, 0.08)',
     paddingVertical: 4,
     paddingHorizontal: 8,
     borderRadius: 6,
   },
   badgeText: {
-    color: '#4CAF50',
+    color: colors.safe,
     fontSize: 9,
     fontWeight: '800',
   },
   tripDate: {
     fontSize: 12,
-    color: '#666666',
+    color: '#64748B',
     marginTop: 4,
   },
   divider: {
-    height: 1,
-    backgroundColor: '#EAEAEA',
+    height: 1.5,
+    backgroundColor: '#E2E8F0',
     marginVertical: 12,
   },
   cardStatsRow: {
@@ -265,13 +265,13 @@ const styles = StyleSheet.create({
   statLabel: {
     fontSize: 9,
     fontWeight: 'bold',
-    color: '#888888',
+    color: '#64748B',
     letterSpacing: 0.5,
   },
   statVal: {
     fontSize: 14,
     fontWeight: 'bold',
-    color: '#1A1A1A',
+    color: '#1E293B',
     marginTop: 4,
   },
 });

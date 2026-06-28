@@ -193,11 +193,11 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 20,
     fontWeight: 'bold',
-    color: '#1A1A1A',
+    color: '#1E293B',
   },
   subtitle: {
     fontSize: 14,
-    color: '#666666',
+    color: '#64748B',
     textAlign: 'center',
     marginVertical: 16,
     lineHeight: 20,
@@ -213,7 +213,7 @@ const styles = StyleSheet.create({
     width: 140,
     height: 140,
     borderRadius: 70,
-    backgroundColor: 'rgba(255, 107, 53, 0.15)',
+    backgroundColor: 'rgba(255, 107, 53, 0.12)',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -221,7 +221,7 @@ const styles = StyleSheet.create({
     width: 100,
     height: 100,
     borderRadius: 50,
-    backgroundColor: 'rgba(255, 107, 53, 0.25)',
+    backgroundColor: 'rgba(255, 107, 53, 0.2)',
   },
   scanCircleBtn: {
     width: 100,
@@ -259,7 +259,7 @@ const styles = StyleSheet.create({
   resultsTitle: {
     fontSize: 16,
     fontWeight: 'bold',
-    color: '#1A1A1A',
+    color: '#1E293B',
   },
   statusLabel: {
     fontSize: 12,
@@ -280,12 +280,12 @@ const styles = StyleSheet.create({
   emptyText: {
     fontSize: 16,
     fontWeight: 'bold',
-    color: '#1A1A1A',
+    color: '#1E293B',
     marginBottom: 6,
   },
   emptySub: {
     fontSize: 12,
-    color: '#888888',
+    color: '#64748B',
     textAlign: 'center',
     lineHeight: 16,
   },
@@ -298,9 +298,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     padding: 16,
     borderRadius: 14,
-    backgroundColor: '#F9F9F9',
-    borderWidth: 1,
-    borderColor: '#EAEAEA',
+    backgroundColor: '#ffffff',
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
     marginBottom: 10,
   },
   deviceTextContent: {
@@ -310,20 +310,20 @@ const styles = StyleSheet.create({
   deviceName: {
     fontSize: 16,
     fontWeight: 'bold',
-    color: '#1A1A1A',
+    color: '#1E293B',
   },
   deviceAddress: {
     fontSize: 11,
-    color: '#888888',
+    color: '#64748B',
     marginTop: 4,
   },
   connectBadge: {
-    backgroundColor: '#E8F5F2',
+    backgroundColor: 'rgba(10, 74, 109, 0.08)',
     paddingVertical: 8,
     paddingHorizontal: 16,
     borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(26, 107, 90, 0.2)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(10, 74, 109, 0.15)',
   },
   connectBadgeText: {
     color: colors.primary,

@@ -1,6 +1,7 @@
 // src/screens/HomeScreen.tsx
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView, StatusBar, ScrollView } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { colors } from '../theme/colors';
 import { useAuthStore } from '../store/useAuthStore';
 
@@ -10,8 +11,8 @@ export function HomeScreen({ navigation }: any) {
 
   return (
     <SafeAreaView style={styles.safe}>
-      <StatusBar barStyle="dark-content" backgroundColor="#F5F5F5" />
-      <ScrollView contentContainerStyle={styles.scrollContainer}>
+      <StatusBar barStyle="dark-content" backgroundColor="#F8F9FA" />
+      <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
           <View>
             <Text style={styles.appTitle}>TravelTrack</Text>
@@ -26,42 +27,56 @@ export function HomeScreen({ navigation }: any) {
 
         {/* Create Group Card */}
         <TouchableOpacity
-          style={[styles.card, { backgroundColor: colors.primary }]}
           onPress={() => navigation.navigate('CreateGroup')}
           activeOpacity={0.9}
+          style={styles.cardWrapper}
         >
-          <View style={styles.cardHeader}>
-            <View style={styles.cardIconCircle}>
-              <Text style={styles.cardIcon}>👑</Text>
+          <LinearGradient
+            colors={['#0A4A6D', '#227093']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.card}
+          >
+            <View style={styles.cardHeader}>
+              <View style={styles.cardIconCircle}>
+                <Text style={styles.cardIcon}>👑</Text>
+              </View>
+              <View style={styles.cardTextContainer}>
+                <Text style={styles.cardTitle}>Create Group</Text>
+                <Text style={styles.cardDesc}>Start a new journey as group leader and invite others to connect.</Text>
+              </View>
             </View>
-            <View style={styles.cardTextContainer}>
-              <Text style={styles.cardTitle}>Create Group</Text>
-              <Text style={styles.cardDesc}>Start a new journey as group leader and invite others to connect.</Text>
+            <View style={styles.cardBadge}>
+              <Text style={styles.cardBadgeText}>Host Trip →</Text>
             </View>
-          </View>
-          <View style={styles.cardBadge}>
-            <Text style={styles.cardBadgeText}>Host Trip →</Text>
-          </View>
+          </LinearGradient>
         </TouchableOpacity>
 
         {/* Join Group Card */}
         <TouchableOpacity
-          style={[styles.card, { backgroundColor: colors.secondary }]}
           onPress={() => navigation.navigate('Scan')}
           activeOpacity={0.9}
+          style={styles.cardWrapper}
         >
-          <View style={styles.cardHeader}>
-            <View style={styles.cardIconCircle}>
-              <Text style={styles.cardIcon}>🔍</Text>
+          <LinearGradient
+            colors={['#FF6B35', '#FF8E53']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.card}
+          >
+            <View style={styles.cardHeader}>
+              <View style={styles.cardIconCircle}>
+                <Text style={styles.cardIcon}>🔍</Text>
+              </View>
+              <View style={styles.cardTextContainer}>
+                <Text style={styles.cardTitle}>Join Group</Text>
+                <Text style={styles.cardDesc}>Scan for nearby hosts using Wi-Fi Direct and join their tracking circle.</Text>
+              </View>
             </View>
-            <View style={styles.cardTextContainer}>
-              <Text style={styles.cardTitle}>Join Group</Text>
-              <Text style={styles.cardDesc}>Scan for nearby hosts using Wi-Fi Direct and join their tracking circle.</Text>
+            <View style={styles.cardBadge}>
+              <Text style={styles.cardBadgeText}>Scan Nearby →</Text>
             </View>
-          </View>
-          <View style={styles.cardBadge}>
-            <Text style={styles.cardBadgeText}>Scan Nearby →</Text>
-          </View>
+          </LinearGradient>
         </TouchableOpacity>
 
         {/* Quick Links Section */}
@@ -99,7 +114,7 @@ export function HomeScreen({ navigation }: any) {
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: '#F5F5F5',
+    backgroundColor: '#F8F9FA',
   },
   scrollContainer: {
     padding: 24,
@@ -113,44 +128,47 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   appTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: colors.primary,
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0A4A6D',
     textTransform: 'uppercase',
-    letterSpacing: 1,
+    letterSpacing: 1.5,
   },
   greeting: {
     fontSize: 26,
     fontWeight: 'bold',
-    color: '#1A1A1A',
+    color: '#1E293B',
     marginTop: 4,
   },
   logoutBtn: {
     paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#D32F2F',
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: '#EF4444',
   },
   logoutText: {
-    color: '#D32F2F',
+    color: '#EF4444',
     fontSize: 13,
     fontWeight: '700',
   },
   sub: {
     fontSize: 15,
-    color: '#666666',
+    color: '#64748B',
     marginBottom: 28,
+  },
+  cardWrapper: {
+    marginBottom: 20,
+    borderRadius: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    elevation: 4,
   },
   card: {
     borderRadius: 20,
     padding: 20,
-    marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
   },
   cardHeader: {
     flexDirection: 'row',
@@ -180,12 +198,12 @@ const styles = StyleSheet.create({
   },
   cardDesc: {
     fontSize: 13,
-    color: 'rgba(255, 255, 255, 0.85)',
+    color: 'rgba(255, 255, 255, 0.9)',
     lineHeight: 18,
   },
   cardBadge: {
     alignSelf: 'flex-end',
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
     paddingVertical: 6,
     paddingHorizontal: 12,
     borderRadius: 12,
@@ -198,7 +216,7 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#1A1A1A',
+    color: '#1E293B',
     marginTop: 12,
     marginBottom: 16,
   },
@@ -214,17 +232,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
+    shadowOpacity: 0.04,
     shadowRadius: 4,
     elevation: 2,
-    borderWidth: 1,
-    borderColor: '#EAEAEA',
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
   },
   gridIconCircle: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#E8F5F2',
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: 'rgba(10, 74, 109, 0.08)',
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 12,
@@ -235,12 +253,12 @@ const styles = StyleSheet.create({
   gridTitle: {
     fontSize: 14,
     fontWeight: 'bold',
-    color: '#1A1A1A',
+    color: '#1E293B',
     marginBottom: 4,
   },
   gridDesc: {
     fontSize: 11,
-    color: '#888888',
+    color: '#64748B',
     textAlign: 'center',
   },
 });

@@ -1,27 +1,37 @@
 // src/screens/OnboardingScreen.tsx
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, StatusBar, Dimensions } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { colors } from '../theme/colors';
 
 const { width } = Dimensions.get('window');
 
 const slides = [
   {
-    icon: '📍',
-    title: 'Track Your Journey',
-    desc: 'Share your real-time location with friends and family. Never lose track of your group even in remote areas.',
+    icon: '✈️',
+    title: 'Communicate',
+    desc: 'Chat with friends, collaborate with them and stay connected anytime, anywhere.',
+    gradient: ['#7B2CBF', '#FF6B35'],
   },
   {
     icon: '🛡️',
     title: 'Stay Safe',
-    desc: 'Instant emergency SOS alerts, proximity boundaries, and automatic warning notifications for your peace of mind.',
+    desc: 'Emergency SOS alerts, nearby hospital locations, and instant notifications for your peace of mind.',
+    gradient: ['#E74C3C', '#FF6B35'],
   },
   {
-    icon: '💬',
-    title: 'Offline Communication',
-    desc: 'Chat with friends and coordinate plans using local peer-to-peer Wi-Fi connections, completely offline.',
+    icon: '👥',
+    title: 'Group Coordination',
+    desc: 'Send meetup points, coordinate plans, and stay connected with your travel companions.',
+    gradient: ['#2ECC71', '#FF6B35'],
   },
-];
+  {
+    icon: '📍',
+    title: 'Track Your Journey',
+    desc: 'Share your real-time location with friends and family. Never lose track of your group during travels.',
+    gradient: ['#0A4A6D', '#10B981'],
+  },
+] as const;
 
 export function OnboardingScreen({ navigation }: any) {
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -34,12 +44,6 @@ export function OnboardingScreen({ navigation }: any) {
     }
   };
 
-  const goBack = () => {
-    if (currentIndex > 0) {
-      setCurrentIndex(currentIndex - 1);
-    }
-  };
-
   const slide = slides[currentIndex];
 
   return (
@@ -48,13 +52,7 @@ export function OnboardingScreen({ navigation }: any) {
       
       {/* Top Header */}
       <View style={styles.header}>
-        {currentIndex > 0 ? (
-          <TouchableOpacity onPress={goBack} style={styles.backBtn}>
-            <Text style={styles.backText}>← Back</Text>
-          </TouchableOpacity>
-        ) : (
-          <View />
-        )}
+        <View />
         <TouchableOpacity style={styles.skipBtn} onPress={() => navigation.replace('Login')}>
           <Text style={styles.skipText}>Skip</Text>
         </TouchableOpacity>
@@ -63,36 +61,47 @@ export function OnboardingScreen({ navigation }: any) {
       {/* Slide Content */}
       <View style={styles.contentContainer}>
         <View style={styles.iconWrapper}>
-          <View style={styles.iconBgPulse}>
+          <LinearGradient
+            colors={slide.gradient}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.iconBgPulse}
+          >
             <View style={styles.iconCircle}>
               <Text style={styles.iconText}>{slide.icon}</Text>
             </View>
-          </View>
+          </LinearGradient>
         </View>
         
         <Text style={styles.title}>{slide.title}</Text>
         <Text style={styles.desc}>{slide.desc}</Text>
       </View>
 
+      {/* Indicators */}
+      <View style={styles.indicatorContainer}>
+        {slides.map((_, i) => (
+          <View
+            key={i}
+            style={[
+              styles.indicator,
+              i === currentIndex ? styles.activeIndicator : null,
+            ]}
+          />
+        ))}
+      </View>
+
       {/* Footer controls */}
       <View style={styles.footer}>
-        {/* Indicators */}
-        <View style={styles.indicatorContainer}>
-          {slides.map((_, i) => (
-            <View
-              key={i}
-              style={[
-                styles.indicator,
-                i === currentIndex ? styles.activeIndicator : null,
-              ]}
-            />
-          ))}
-        </View>
-
-        {/* Primary Action Button */}
-        <TouchableOpacity style={styles.nextBtn} onPress={goNext}>
-          <Text style={styles.nextBtnText}>
-            {currentIndex === slides.length - 1 ? 'Get Started 🚀' : 'Next →'}
+        <TouchableOpacity 
+          style={styles.skipBtnBottom} 
+          onPress={() => navigation.replace('Login')}
+        >
+          <Text style={styles.skipBtnTextBottom}>Skip</Text>
+        </TouchableOpacity>
+        
+        <TouchableOpacity style={styles.nextBtnBottom} onPress={goNext}>
+          <Text style={styles.nextBtnTextBottom}>
+            {currentIndex === slides.length - 1 ? 'Get Started' : 'Next'}
           </Text>
         </TouchableOpacity>
       </View>
@@ -105,7 +114,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#ffffff',
     justifyContent: 'space-between',
-    paddingBottom: 40,
   },
   header: {
     flexDirection: 'row',
@@ -115,20 +123,12 @@ const styles = StyleSheet.create({
     paddingTop: 20,
     height: 60,
   },
-  backBtn: {
-    paddingVertical: 8,
-  },
-  backText: {
-    color: '#888888',
-    fontSize: 15,
-    fontWeight: '600',
-  },
   skipBtn: {
     paddingVertical: 8,
     paddingHorizontal: 12,
   },
   skipText: {
-    color: colors.primary,
+    color: '#64748B',
     fontWeight: '700',
     fontSize: 15,
   },
@@ -147,17 +147,13 @@ const styles = StyleSheet.create({
     width: 170,
     height: 170,
     borderRadius: 85,
-    backgroundColor: '#E8F5F2',
-    justify('center'),
-    alignItems: 'center',
-  },
-  iconBgPulse: {
-    width: 170,
-    height: 170,
-    borderRadius: 85,
-    backgroundColor: '#E8F5F2',
     justifyContent: 'center',
     alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    elevation: 4,
   },
   iconCircle: {
     width: 130,
@@ -166,11 +162,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: colors.primary,
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.15,
-    shadowRadius: 15,
-    elevation: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
   iconText: {
     fontSize: 64,
@@ -178,56 +174,72 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 28,
     fontWeight: 'bold',
-    color: '#1A1A1A',
+    color: '#1E293B',
     textAlign: 'center',
     marginBottom: 16,
   },
   desc: {
     fontSize: 16,
-    color: '#666666',
+    color: '#64748B',
     textAlign: 'center',
     lineHeight: 24,
     paddingHorizontal: 10,
-  },
-  footer: {
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    gap: 32,
   },
   indicatorContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    marginVertical: 24,
   },
   indicator: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#E0E0E0',
+    backgroundColor: '#E2E8F0',
     marginHorizontal: 4,
   },
   activeIndicator: {
     width: 24,
-    backgroundColor: colors.primary,
+    backgroundColor: '#0A4A6D',
     borderRadius: 4,
   },
-  nextBtn: {
-    backgroundColor: colors.primary,
-    paddingVertical: 16,
-    paddingHorizontal: 48,
-    borderRadius: 30,
-    width: width - 48,
+  footer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 24,
+    paddingBottom: 40,
     alignItems: 'center',
-    shadowColor: colors.primary,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    elevation: 5,
+    gap: 16,
   },
-  nextBtnText: {
+  skipBtnBottom: {
+    flex: 1,
+    paddingVertical: 16,
+    borderRadius: 12,
+    backgroundColor: '#F8F9FA',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    alignItems: 'center',
+  },
+  skipBtnTextBottom: {
+    color: '#64748B',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  nextBtnBottom: {
+    flex: 1.2,
+    backgroundColor: '#0A4A6D',
+    paddingVertical: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+    shadowColor: '#0A4A6D',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  nextBtnTextBottom: {
     color: '#ffffff',
     fontSize: 16,
     fontWeight: '700',
-    letterSpacing: 0.5,
   },
 });
