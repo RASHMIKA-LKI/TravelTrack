@@ -1,0 +1,8 @@
+{
+  "dependencies": {
+    "@types/node": "^26.0.1",
+    "react-native-geolocation-service": "^5.3.1",
+    "react-native-tcp-socket": "^6.4.1",
+    "react-native-wifi-p2p": "^3.6.1"
+  }
+}
