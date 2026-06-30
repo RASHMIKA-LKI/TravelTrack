@@ -8,7 +8,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getAuth, initializeAuth } from 'firebase/auth';
+import { getAuth, initializeAuth, getReactNativePersistence } from 'firebase/auth';
 import { getFirestore, enableNetwork } from 'firebase/firestore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -27,40 +27,40 @@ const firebaseConfig = {
 // ─── Custom AsyncStorage Persistence ─────────────────────────────────────────
 // Firebase v12 for React Native requires a custom persistence adapter using
 // AsyncStorage so the user session is saved to disk and restored on app restart.
-const reactNativePersistence = {
-  type: 'LOCAL' as const,
+// const reactNativePersistence = {
+//   type: 'LOCAL' as const,
 
-  async _isAvailable(): Promise<boolean> {
-    try {
-      const key = '__firebase_test__';
-      await AsyncStorage.setItem(key, '1');
-      await AsyncStorage.removeItem(key);
-      return true;
-    } catch {
-      return false;
-    }
-  },
+//   async _isAvailable(): Promise<boolean> {
+//     try {
+//       const key = '__firebase_test__';
+//       await AsyncStorage.setItem(key, '1');
+//       await AsyncStorage.removeItem(key);
+//       return true;
+//     } catch {
+//       return false;
+//     }
+//   },
 
-  async _set(key: string, value: string): Promise<void> {
-    await AsyncStorage.setItem(key, value);
-  },
+//   async _set(key: string, value: string): Promise<void> {
+//     await AsyncStorage.setItem(key, value);
+//   },
 
-  async _get(key: string): Promise<string | null> {
-    return AsyncStorage.getItem(key);
-  },
+//   async _get(key: string): Promise<string | null> {
+//     return AsyncStorage.getItem(key);
+//   },
 
-  async _remove(key: string): Promise<void> {
-    await AsyncStorage.removeItem(key);
-  },
+//   async _remove(key: string): Promise<void> {
+//     await AsyncStorage.removeItem(key);
+//   },
 
-  _addListener(_key: string, _listener: unknown): void {
-    // Not needed for AsyncStorage
-  },
+//   _addListener(_key: string, _listener: unknown): void {
+//     // Not needed for AsyncStorage
+//   },
 
-  _removeListener(_key: string, _listener: unknown): void {
-    // Not needed for AsyncStorage
-  },
-};
+//   _removeListener(_key: string, _listener: unknown): void {
+//     // Not needed for AsyncStorage
+//   },
+// };
 
 // ─── Initialize Firebase App ──────────────────────────────────────────────────
 // Guard against duplicate initialization during Expo hot-reload in development
@@ -69,13 +69,23 @@ const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 // ─── Initialize Firebase Auth ─────────────────────────────────────────────────
 // Uses our custom AsyncStorage persistence so the user stays logged in
 // across full app restarts (no need to sign in every time they open the app).
+// let auth: ReturnType<typeof getAuth>;
+// try {
+//   auth = initializeAuth(app, {
+//     persistence: reactNativePersistence as any,
+//   });
+// } catch {
+//   // initializeAuth throws if called a second time (e.g. on Fast Refresh in dev)
+//   auth = getAuth(app);
+// }
 let auth: ReturnType<typeof getAuth>;
+
 try {
   auth = initializeAuth(app, {
-    persistence: reactNativePersistence as any,
+    persistence: getReactNativePersistence(AsyncStorage),
   });
 } catch {
-  // initializeAuth throws if called a second time (e.g. on Fast Refresh in dev)
+  // Fast Refresh / Hot Reload
   auth = getAuth(app);
 }
 
