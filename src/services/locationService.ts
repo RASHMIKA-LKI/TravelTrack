@@ -1,10 +1,8 @@
 // src/services/locationService.ts
-// ─────────────────────────────────────────────────────────────────────────────
-// STUB — Real implementation will be provided by Member 3 (GPS Engine)
-// This file exists so Member 5's hooks compile without Member 3's branch merged.
-// ─────────────────────────────────────────────────────────────────────────────
+import * as Location from "expo-location";
+import { Platform } from "react-native";
 
-interface LocationData {
+export interface LocationData {
   latitude: number;
   longitude: number;
   accuracy: number;
@@ -17,24 +15,103 @@ class LocationService {
   /** Set this callback to receive location updates */
   onLocationUpdate: ((location: LocationData) => void) | null = null;
 
-  private _watchId: any = null;
+  private subscription: Location.LocationSubscription | null = null;
 
-  /**
-   * Start listening for GPS location updates.
-   * Real implementation uses expo-location or react-native Geolocation.
-   */
-  async startTracking(): Promise<void> {
-    console.log('[LocationService] STUB: startTracking — waiting for Member 3 implementation');
-    // TODO: Member 3 replaces this with real GPS tracking
+  private createFallbackLocation(): LocationData {
+    return {
+      latitude: 0,
+      longitude: 0,
+      accuracy: 0,
+      speed: 0,
+      bearing: 0,
+      timestamp: Date.now(),
+    };
   }
 
-  /**
-   * Stop listening for GPS location updates.
-   */
+  async requestPermission(): Promise<boolean> {
+    if (Platform.OS === "web") {
+      return true;
+    }
+
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      return status === "granted";
+    } catch {
+      return false;
+    }
+  }
+
+  async startTracking(): Promise<void> {
+    const hasPermission = await this.requestPermission();
+
+    if (!hasPermission) {
+      console.warn("[LocationService] Location permission denied");
+      return;
+    }
+
+    if (this.subscription) {
+      return;
+    }
+
+    this.subscription = await Location.watchPositionAsync(
+      {
+        accuracy: Location.Accuracy.High,
+        timeInterval: 3000,
+        distanceInterval: 1,
+      },
+      (position) => {
+        const location: LocationData = {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: position.coords.accuracy ?? 0,
+          speed: position.coords.speed ?? 0,
+          bearing: position.coords.heading ?? 0,
+          timestamp: position.timestamp,
+        };
+
+        if (this.onLocationUpdate) {
+          this.onLocationUpdate(location);
+        }
+      },
+    );
+  }
+
   stopTracking(): void {
-    console.log('[LocationService] STUB: stopTracking — waiting for Member 3 implementation');
-    if (this._watchId !== null) {
-      this._watchId = null;
+    if (this.subscription) {
+      this.subscription.remove();
+      this.subscription = null;
+    }
+  }
+
+  async getCurrentLocation(): Promise<LocationData> {
+    const hasPermission = await this.requestPermission();
+
+    if (!hasPermission) {
+      console.warn(
+        "[LocationService] Location permission not granted, using fallback coordinates",
+      );
+      return this.createFallbackLocation();
+    }
+
+    try {
+      const position = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+      });
+
+      return {
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        accuracy: position.coords.accuracy ?? 0,
+        speed: position.coords.speed ?? 0,
+        bearing: position.coords.heading ?? 0,
+        timestamp: position.timestamp,
+      };
+    } catch (error) {
+      console.warn(
+        "[LocationService] Failed to get current location, using fallback coordinates",
+        error,
+      );
+      return this.createFallbackLocation();
     }
   }
 }
