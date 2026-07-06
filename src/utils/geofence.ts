@@ -53,3 +53,40 @@ export function formatDistance(meters: number): string {
   }
   return `${(meters / 1000).toFixed(1)}km`;
 }
+
+/**
+ * Check if a member is within the safe radius.
+ * @returns true = safe, false = out of range
+ */
+export function isWithinRadius(
+  memberLat: number,
+  memberLon: number,
+  leaderLat: number,
+  leaderLon: number,
+  radiusMeters: number = 50
+): boolean {
+  const dist = calculateDistance(memberLat, memberLon, leaderLat, leaderLon);
+  return dist <= radiusMeters;
+}
+
+/**
+ * Calculate compass bearing from one point to another.
+ * Returns degrees 0-360 (0 = North, 90 = East, 180 = South, 270 = West)
+ */
+export function calculateBearing(
+  fromLat: number,
+  fromLon: number,
+  toLat: number,
+  toLon: number
+): number {
+  const φ1 = (fromLat * Math.PI) / 180;
+  const φ2 = (toLat * Math.PI) / 180;
+  const Δλ = ((toLon - fromLon) * Math.PI) / 180;
+  
+  const y = Math.sin(Δλ) * Math.cos(φ2);
+  const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+  
+  const bearing = (Math.atan2(y, x) * 180) / Math.PI;
+  return (bearing + 360) % 360; // Normalize to 0-360
+}
+

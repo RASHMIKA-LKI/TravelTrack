@@ -1,8 +1,6 @@
 // src/services/locationService.ts
-// ─────────────────────────────────────────────────────────────────────────────
-// STUB — Real implementation will be provided by Member 3 (GPS Engine)
-// This file exists so Member 5's hooks compile without Member 3's branch merged.
-// ─────────────────────────────────────────────────────────────────────────────
+import Geolocation from 'react-native-geolocation-service';
+import { PermissionsAndroid } from 'react-native';
 
 interface LocationData {
   latitude: number;
@@ -14,28 +12,88 @@ interface LocationData {
 }
 
 class LocationService {
-  /** Set this callback to receive location updates */
-  onLocationUpdate: ((location: LocationData) => void) | null = null;
+  private watchId: number | null = null;
+  public onLocationUpdate: ((location: LocationData) => void) | null = null;
 
-  private _watchId: any = null;
-
-  /**
-   * Start listening for GPS location updates.
-   * Real implementation uses expo-location or react-native Geolocation.
-   */
-  async startTracking(): Promise<void> {
-    console.log('[LocationService] STUB: startTracking — waiting for Member 3 implementation');
-    // TODO: Member 3 replaces this with real GPS tracking
+  /** Ask the user for location permission */
+  async requestPermission(): Promise<boolean> {
+    const result = await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+      {
+        title: 'TravelTrack needs Location',
+        message: 'We need your location to track group members and alert you if someone goes out of range.',
+        buttonPositive: 'Allow',
+        buttonNegative: 'Deny',
+      }
+    );
+    return result === PermissionsAndroid.RESULTS.GRANTED;
   }
 
-  /**
-   * Stop listening for GPS location updates.
-   */
-  stopTracking(): void {
-    console.log('[LocationService] STUB: stopTracking — waiting for Member 3 implementation');
-    if (this._watchId !== null) {
-      this._watchId = null;
+  /** Start tracking GPS — updates every 3 seconds */
+  async startTracking(): Promise<void> {
+    const hasPermission = await this.requestPermission();
+    if (!hasPermission) {
+      console.error('❌ Location permission denied!');
+      return;
     }
+
+    this.watchId = Geolocation.watchPosition(
+      (position) => {
+        const location: LocationData = {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+          speed: position.coords.speed ?? 0,
+          bearing: position.coords.heading ?? 0,
+          timestamp: position.timestamp,
+        };
+        
+        console.log('📍 Location update:', location.latitude, location.longitude);
+        
+        if (this.onLocationUpdate) {
+          this.onLocationUpdate(location);
+        }
+      },
+      (error) => {
+        console.error('GPS Error:', error);
+      },
+      {
+        enableHighAccuracy: true,    // Use GPS chip, not just cell towers
+        distanceFilter: 1,           // Update every 1 meter of movement
+        interval: 3000,              // Check every 3 seconds
+        fastestInterval: 2000,       // Never faster than every 2 seconds
+        forceRequestLocation: true,  // Get a location even if phone hasn't moved
+      }
+    );
+    
+    console.log('✅ GPS tracking started. Watch ID:', this.watchId);
+  }
+
+  /** Stop tracking GPS */
+  stopTracking(): void {
+    if (this.watchId !== null) {
+      Geolocation.clearWatch(this.watchId);
+      this.watchId = null;
+      console.log('GPS tracking stopped.');
+    }
+  }
+
+  /** Get ONE location reading right now */
+  getCurrentLocation(): Promise<LocationData> {
+    return new Promise((resolve, reject) => {
+      Geolocation.getCurrentPosition(
+        (position) => resolve({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+          speed: position.coords.speed ?? 0,
+          bearing: position.coords.heading ?? 0,
+          timestamp: position.timestamp,
+        }),
+        (error) => reject(error),
+        { enableHighAccuracy: true, timeout: 10000 }
+      );
+    });
   }
 }
 

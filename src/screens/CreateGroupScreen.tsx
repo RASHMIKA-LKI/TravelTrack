@@ -14,6 +14,10 @@ import {
 import { colors } from '../theme/colors';
 import { useTrackingStore } from '../store/useTrackingStore';
 import { useWifiDirect } from '../hooks/useWifiDirect';
+import { isDemoMode } from '../utils/isDemoMode';
+import { startDemo } from '../services/demoService';
+
+const DEMO = isDemoMode();
 
 export function CreateGroupScreen({ navigation }: any) {
   const [groupName, setGroupName] = useState('');
@@ -32,45 +36,75 @@ export function CreateGroupScreen({ navigation }: any) {
       return;
     }
 
-    setLoading(false); // Make sure it works in the mockup state even if WifiDirect fails or isn't linked yet
     setLoading(true);
-    try {
-      // Start Wi-Fi Direct hotspot & TCP Server
-      if (startHosting) {
-        await startHosting();
-      }
 
-      // Configure tracking stores
-      if (setRole) setRole('leader');
-      if (setStoreRadius) setStoreRadius(radius);
-      if (setGroup) {
-        setGroup({
-          id: Date.now().toString(),
-          name: groupName,
-          leaderId: 'leader-me',
-          radiusMeters: radius,
-          createdAt: Date.now(),
-        });
-      }
-      if (setIsTracking) setIsTracking(true);
+    // ── DEMO MODE ──────────────────────────────────────────────────────────
+    if (DEMO) {
+      // Skip all Wi-Fi Direct / TCP logic. Seed the store with simulated data.
+      startDemo();
+      setStoreRadius(radius);
+      setGroup({
+        id: 'demo-group',
+        name: groupName || '🗺️ Demo Trip',
+        leaderId: 'leader-me',
+        radiusMeters: radius,
+        createdAt: Date.now(),
+      });
+      setLoading(false);
+      navigation.navigate('GroupLobby', { groupName: groupName || '🗺️ Demo Trip', isLeader: true });
+      return;
+    }
+    // ───────────────────────────────────────────────────────────────────────
+
+    try {
+      // ✅ Start Wi-Fi Direct discovery + TCP Server
+      await startHosting();
+
+      // Configure group in the store
+      setRole('leader');
+      setStoreRadius(radius);
+      setGroup({
+        id: Date.now().toString(),
+        name: groupName,
+        leaderId: 'leader-me',
+        radiusMeters: radius,
+        createdAt: Date.now(),
+      });
+      setIsTracking(true);
 
       navigation.navigate('GroupLobby', { groupName, isLeader: true });
     } catch (error: any) {
-      console.warn('Start hosting failed, navigating to lobby anyway for demo purposes.', error);
-      
-      // Fallback: Continue in mockup mode
-      if (setRole) setRole('leader');
-      if (setStoreRadius) setStoreRadius(radius);
-      if (setGroup) {
-        setGroup({
-          id: Date.now().toString(),
-          name: groupName,
-          leaderId: 'leader-me',
-          radiusMeters: radius,
-          createdAt: Date.now(),
-        });
-      }
-      navigation.navigate('GroupLobby', { groupName, isLeader: true });
+      const msg: string = error?.message || 'Unknown error';
+      Alert.alert(
+        'Wi-Fi Direct Error',
+        'Could not start peer discovery.\n\n' +
+          '• Make sure Wi-Fi is ON\n' +
+          '• Grant Location + Nearby Devices permissions in Settings\n' +
+          '• Toggle Wi-Fi off/on and try again\n\n' +
+          'Detail: ' + msg,
+        [
+          {
+            text: 'Try Anyway',
+            onPress: () => {
+              // TCP server already started — proceed to lobby even if
+              // Wi-Fi Direct discovery failed. Members who connect via
+              // Wi-Fi Direct from their side will still reach the TCP server.
+              setRole('leader');
+              setStoreRadius(radius);
+              setGroup({
+                id: Date.now().toString(),
+                name: groupName,
+                leaderId: 'leader-me',
+                radiusMeters: radius,
+                createdAt: Date.now(),
+              });
+              setIsTracking(true);
+              navigation.navigate('GroupLobby', { groupName, isLeader: true });
+            },
+          },
+          { text: 'Cancel', style: 'cancel' },
+        ]
+      );
     } finally {
       setLoading(false);
     }
@@ -87,6 +121,13 @@ export function CreateGroupScreen({ navigation }: any) {
           <Text style={styles.headerTitle}>Create Group</Text>
           <View style={{ width: 44 }} />
         </View>
+
+        {/* ── Demo Mode Banner ── */}
+        {DEMO && (
+          <View style={styles.demoBanner}>
+            <Text style={styles.demoBannerText}>🎭 DEMO MODE — No Wi-Fi Direct needed</Text>
+          </View>
+        )}
 
         <View style={styles.formContainer}>
           <Text style={styles.label}>Group Name</Text>
@@ -274,5 +315,20 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 17,
     fontWeight: 'bold',
+  },
+  demoBanner: {
+    backgroundColor: '#6C3FC5',
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    marginHorizontal: 0,
+    marginBottom: 12,
+    alignItems: 'center',
+  },
+  demoBannerText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.5,
   },
 });

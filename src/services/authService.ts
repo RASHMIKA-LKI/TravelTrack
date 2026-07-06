@@ -37,6 +37,8 @@ function getAuthErrorMessage(error: unknown): string {
         return 'Too many failed attempts. Please wait a moment and try again.';
       case 'auth/network-request-failed':
         return 'No internet connection. Check your Wi-Fi or mobile data.';
+      case 'auth/admin-restricted-operation':
+        return 'This Firebase auth method is disabled in the project. Enable Email/Password and Anonymous sign-in in the Firebase Console.';
       case 'auth/operation-not-allowed':
         return 'This sign-in method is not enabled. Contact support.';
       default:

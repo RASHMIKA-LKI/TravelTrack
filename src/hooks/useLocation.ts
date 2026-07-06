@@ -2,6 +2,8 @@
 import { useEffect, useCallback } from 'react';
 import { locationService } from '../services/locationService';
 import { useTrackingStore } from '../store/useTrackingStore';
+import { tcpSocketManager } from '../services/tcpSocketManager';
+import { useAuthStore } from '../store/useAuthStore';
 
 /**
  * Use this hook in any screen to access the current user's GPS location.
@@ -11,6 +13,10 @@ import { useTrackingStore } from '../store/useTrackingStore';
 export function useLocation() {
   const setMyLocation = useTrackingStore((state) => state.setMyLocation);
   const myLocation = useTrackingStore((state) => state.myLocation);
+  const role = useTrackingStore((state) => state.role);
+  const connectionStatus = useTrackingStore((state) => state.connectionStatus);
+  const { user } = useAuthStore();
+  const userName = user?.displayName || user?.email?.split('@')[0] || 'Alex Johnson';
 
   useEffect(() => {
     // When this hook is first mounted, start listening for location updates
@@ -23,6 +29,56 @@ export function useLocation() {
       locationService.onLocationUpdate = null;
     };
   }, [setMyLocation]);
+
+  // Sync location over P2P network — only when actually connected
+  useEffect(() => {
+    if (!myLocation) return;
+
+    // ✅ BUG FIX: Do NOT try to send/broadcast if not yet connected.
+    // This prevents noisy errors and potential crashes when location updates
+    // fire before the TCP connection is established.
+    if (connectionStatus !== 'connected') return;
+
+    if (role === 'member') {
+      // Guard: only send if the TCP client is actually connected
+      if (!tcpSocketManager.isClientConnected) return;
+
+      const payload = {
+        type: 'LOCATION',
+        memberId: 'me',
+        memberName: userName,
+        latitude: myLocation.latitude,
+        longitude: myLocation.longitude,
+        accuracy: myLocation.accuracy,
+        bearing: myLocation.bearing,
+        speed: myLocation.speed,
+        batteryLevel: 90,
+        timestamp: myLocation.timestamp || Date.now(),
+      };
+      tcpSocketManager.send(payload);
+    } else if (role === 'leader') {
+      // Guard: only broadcast if the TCP server is running
+      if (!tcpSocketManager.isServerRunning) return;
+
+      const members = useTrackingStore.getState().members;
+      const payload = {
+        type: 'GROUP_STATE',
+        members: [
+          {
+            id: 'leader-me',
+            name: userName + ' (Leader)',
+            latitude: myLocation.latitude,
+            longitude: myLocation.longitude,
+            batteryLevel: 100,
+            status: 'safe' as const,
+            lastSeen: myLocation.timestamp || Date.now(),
+          },
+          ...members,
+        ],
+      };
+      tcpSocketManager.broadcast(payload);
+    }
+  }, [myLocation, role, userName, connectionStatus]);
 
   /** Call this to start GPS tracking */
   const startTracking = useCallback(async () => {

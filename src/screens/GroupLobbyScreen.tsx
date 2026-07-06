@@ -12,6 +12,14 @@ import {
 } from 'react-native';
 import { colors } from '../theme/colors';
 import { useTrackingStore } from '../store/useTrackingStore';
+import { tcpSocketManager } from '../services/tcpSocketManager';
+import { isDemoMode } from '../utils/isDemoMode';
+import { Platform } from 'react-native';
+import QRCode from 'react-native-qrcode-svg';
+import * as Device from 'expo-device';
+
+const DEMO = isDemoMode();
+const DEVICE_NAME = Device.deviceName || (Platform.OS === 'android' ? Platform.constants.Model : 'iPhone');
 
 export function GroupLobbyScreen({ navigation, route }: any) {
   const { groupName, isLeader } = route.params || {};
@@ -20,6 +28,7 @@ export function GroupLobbyScreen({ navigation, route }: any) {
   const isTracking = useTrackingStore((state) => state.isTracking);
   const setIsTracking = useTrackingStore((state) => state.setIsTracking);
   const resetTracking = useTrackingStore((state) => state.resetTracking);
+  const role = useTrackingStore((state) => state.role);
 
   // Fallback demo members if store is empty (to see visual styling)
   const fallbackMembers = [
@@ -28,7 +37,7 @@ export function GroupLobbyScreen({ navigation, route }: any) {
     { id: '3', name: 'Mike Perera', status: 'safe', batteryLevel: 72, isMe: false },
   ];
 
-  const displayMembers = storeMembers.length > 0 ? storeMembers.map(m => ({
+  const displayMembers = (storeMembers.length > 0 || role !== null) ? storeMembers.map(m => ({
     id: m.id,
     name: m.name,
     status: m.status,
@@ -47,6 +56,14 @@ export function GroupLobbyScreen({ navigation, route }: any) {
     if (setIsTracking) {
       setIsTracking(true);
     }
+
+    // ✅ BUG FIX: Broadcast START_TRACKING to all connected members so they navigate too
+    try {
+      tcpSocketManager.broadcast({ type: 'START_TRACKING', timestamp: Date.now() });
+    } catch (e) {
+      console.warn('Failed to broadcast START_TRACKING:', e);
+    }
+
     // Navigate leader to TrackingScreen
     navigation.replace('Tracking');
   };
@@ -72,6 +89,13 @@ export function GroupLobbyScreen({ navigation, route }: any) {
           <View style={{ width: 60 }} />
         </View>
 
+        {/* Demo Mode Banner */}
+        {DEMO && (
+          <View style={styles.demoBanner}>
+            <Text style={styles.demoBannerText}>🎭 DEMO MODE — 3 simulated members connected</Text>
+          </View>
+        )}
+
         <View style={styles.banner}>
           <Text style={styles.bannerEmoji}>{isLeader ? '👑' : '📶'}</Text>
           <View style={styles.bannerContent}>
@@ -85,6 +109,25 @@ export function GroupLobbyScreen({ navigation, route }: any) {
             </Text>
           </View>
         </View>
+
+        {/* Leader QR Code Section */}
+        {isLeader && (
+          <View style={styles.qrCard}>
+            <Text style={styles.qrTitle}>Invite Members via QR Code</Text>
+            <Text style={styles.qrSubtitle}>Ask others to scan this code on their Scan screen to connect instantly</Text>
+            <View style={styles.qrContainer}>
+              <QRCode
+                value={DEMO ? 'DEMO_PEER' : DEVICE_NAME}
+                size={130}
+                color="#0A4A6D"
+                backgroundColor="#ffffff"
+              />
+            </View>
+            <Text style={styles.qrInstructions}>
+              P2P Host Name contains: <Text style={{ fontWeight: 'bold' }}>{DEVICE_NAME}</Text>
+            </Text>
+          </View>
+        )}
 
         <View style={styles.membersSection}>
           <View style={styles.sectionHeader}>
@@ -310,5 +353,57 @@ const styles = StyleSheet.create({
     color: '#64748B',
     fontSize: 14,
     fontWeight: '600',
+  },
+  demoBanner: {
+    backgroundColor: '#6C3FC5',
+    borderRadius: 10,
+    paddingVertical: 7,
+    paddingHorizontal: 14,
+    marginBottom: 10,
+    alignItems: 'center',
+  },
+  demoBannerText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+  },
+  qrCard: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
+    padding: 16,
+    marginVertical: 10,
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+  },
+  qrTitle: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: '#0A4A6D',
+    marginBottom: 4,
+  },
+  qrSubtitle: {
+    fontSize: 12,
+    color: '#64748B',
+    textAlign: 'center',
+    marginBottom: 12,
+    paddingHorizontal: 8,
+  },
+  qrContainer: {
+    padding: 10,
+    backgroundColor: '#ffffff',
+    borderRadius: 10,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 2,
+    marginBottom: 8,
+  },
+  qrInstructions: {
+    fontSize: 12,
+    color: '#475569',
+    marginTop: 4,
   },
 });

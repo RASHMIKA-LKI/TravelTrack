@@ -15,14 +15,97 @@ import {
 import { colors } from '../theme/colors';
 import { useWifiDirect } from '../hooks/useWifiDirect';
 import { useTrackingStore } from '../store/useTrackingStore';
+import { isDemoMode } from '../utils/isDemoMode';
+import { startDemo, DEMO_PEERS } from '../services/demoService';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+
+const DEMO = isDemoMode();
 
 export function ScanScreen({ navigation }: any) {
   const [scanning, setScanning] = useState(false);
   const [devices, setDevices] = useState<any[]>([]);
+  const [showScanner, setShowScanner] = useState(false);
+  const [permission, requestPermission] = useCameraPermissions();
   const pulseAnim = React.useRef(new Animated.Value(1)).current;
 
   const { startScanning, connectToLeader } = useWifiDirect();
   const setRole = useTrackingStore((state) => state.setRole);
+
+  const handleQRScanned = async (scannedModel: string) => {
+    setShowScanner(false);
+    if (!scannedModel) return;
+
+    // ── DEMO MODE ───────────────────────────────────────────────
+    if (DEMO || scannedModel === 'DEMO_PEER') {
+      startDemo();
+      setRole('member');
+      navigation.navigate('GroupLobby', { isLeader: false, groupName: "Demo QR Trip (Kandy)" });
+      return;
+    }
+    // ──────────────────────────────────────────────────────────
+
+    setScanning(true);
+    let connected = false;
+    let latestPeers: any[] = [];
+
+    let timeoutId = setTimeout(() => {
+      if (!connected) {
+        setScanning(false);
+        const visibleDevicesList = latestPeers
+          .map(p => `• ${p.deviceName || 'Unknown'} (${p.deviceAddress})`)
+          .join('\n');
+        
+        Alert.alert(
+          'Host Not Found',
+          `Could not locate a P2P host device with ID containing "${scannedModel}" nearby.\n\n` +
+          `Discovered devices:\n${visibleDevicesList || 'No devices discovered'}\n\n` +
+          `Make sure Phone A has "Start Hosting Group" active and is close to you.`
+        );
+      }
+    }, 18000); // 18s timeout
+
+    try {
+      await startScanning(async (foundPeers) => {
+        latestPeers = foundPeers;
+        if (connected) return;
+
+        // Search for a peer containing the scanned model/name (case-insensitive)
+        const targetPeer = foundPeers.find(p =>
+          p.deviceName && p.deviceName.toUpperCase().includes(scannedModel.toUpperCase())
+        );
+
+        if (targetPeer) {
+          connected = true;
+          clearTimeout(timeoutId);
+          setScanning(false);
+          
+          try {
+            await connectToLeader(targetPeer.deviceAddress);
+            setRole('member');
+            navigation.navigate('GroupLobby', { isLeader: false, groupName: targetPeer.deviceName });
+          } catch (err: any) {
+            Alert.alert('Connection Failed', err.message);
+          }
+        }
+      });
+    } catch (e: any) {
+      clearTimeout(timeoutId);
+      setScanning(false);
+      Alert.alert('Scan Failed', e.message);
+    }
+  };
+
+  const openScanner = async () => {
+    if (!permission) return;
+    if (!permission.granted) {
+      const res = await requestPermission();
+      if (!res.granted) {
+        Alert.alert('Permission Required', 'Camera permission is needed to scan QR codes.');
+        return;
+      }
+    }
+    setShowScanner(true);
+  };
 
   useEffect(() => {
     if (scanning) {
@@ -48,22 +131,23 @@ export function ScanScreen({ navigation }: any) {
   const startScan = async () => {
     setScanning(true);
     setDevices([]);
+
+    // ── DEMO MODE ───────────────────────────────────────────────
+    if (DEMO) {
+      setTimeout(() => {
+        setDevices(DEMO_PEERS);
+        setScanning(false);
+      }, 2200);
+      return;
+    }
+    // ──────────────────────────────────────────────────────────
+
     try {
       if (startScanning) {
         await startScanning((foundPeers) => {
           setDevices(foundPeers);
           setScanning(false);
         });
-      } else {
-        // Fallback/Mock data for build compilation & design review
-        setTimeout(() => {
-          setDevices([
-            { deviceAddress: '1A:2B:3C:4D:5E:6F', deviceName: "Alex's Phone (Knuckles Trek)" },
-            { deviceAddress: '2B:3C:4D:5E:6F:7A', deviceName: "Sarah's Group (Adam's Peak)" },
-            { deviceAddress: '3C:4D:5E:6F:7A:8B', deviceName: "Trek Leader Sri Lanka" },
-          ]);
-          setScanning(false);
-        }, 2200);
       }
     } catch (e: any) {
       Alert.alert('Scan Error', 'Unable to start peer discovery: ' + e.message);
@@ -73,19 +157,56 @@ export function ScanScreen({ navigation }: any) {
 
   const handleConnect = async (device: any) => {
     setScanning(false);
+
+    // ── DEMO MODE ───────────────────────────────────────────────
+    if (DEMO) {
+      startDemo();
+      setRole('member');
+      navigation.navigate('GroupLobby', { isLeader: false, groupName: device.deviceName });
+      return;
+    }
+    // ──────────────────────────────────────────────────────────
+
     try {
       if (connectToLeader) {
         await connectToLeader(device.deviceAddress);
       }
       if (setRole) setRole('member');
-
       navigation.navigate('GroupLobby', { isLeader: false, groupName: device.deviceName });
     } catch (e: any) {
-      console.warn('Connect failed, fallback to simulated lobby for validation.', e);
-      if (setRole) setRole('member');
-      navigation.navigate('GroupLobby', { isLeader: false, groupName: device.deviceName });
+      Alert.alert(
+        'Connection Failed',
+        'Could not connect to the group leader. Make sure both devices have Wi-Fi and Location turned on, and that the leader has already created a group.\n\nError: ' + e.message,
+        [{ text: 'OK' }]
+      );
     }
   };
+
+  if (showScanner) {
+    return (
+      <SafeAreaView style={styles.scannerSafe}>
+        <StatusBar barStyle="light-content" backgroundColor="#000000" />
+        <CameraView
+          style={StyleSheet.absoluteFillObject}
+          facing="back"
+          barcodeScannerSettings={{
+            barcodeTypes: ['qr'],
+          }}
+          onBarcodeScanned={({ data }) => handleQRScanned(data)}
+        />
+        
+        {/* Scanner Overlay UI */}
+        <View style={styles.scannerOverlay}>
+          <View style={styles.scannerTargetFrame} />
+          <Text style={styles.scannerTip}>Align the Leader's QR Code inside the frame</Text>
+          
+          <TouchableOpacity style={styles.closeScannerBtn} onPress={() => setShowScanner(false)}>
+            <Text style={styles.closeScannerBtnText}>Cancel Scan</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -99,8 +220,17 @@ export function ScanScreen({ navigation }: any) {
           <View style={{ width: 44 }} />
         </View>
 
+        {/* ── Demo Banner ── */}
+        {DEMO && (
+          <View style={styles.demoBanner}>
+            <Text style={styles.demoBannerText}>🎭 DEMO MODE — Tap Scan to see simulated groups</Text>
+          </View>
+        )}
+
         <Text style={styles.subtitle}>
-          Turn on Wi-Fi and location on your device to search for nearby group hosts.
+          {DEMO
+            ? 'Tap the Scan button to discover simulated nearby groups.'
+            : 'Turn on Wi-Fi and location on your device to search for nearby group hosts.'}
         </Text>
 
         <View style={styles.pulseContainer}>
@@ -123,6 +253,14 @@ export function ScanScreen({ navigation }: any) {
                 <Text style={styles.scanBtnText}>Scan</Text>
               </>
             )}
+          </TouchableOpacity>
+        </View>
+
+        {/* Scan via QR Code Option */}
+        <View style={styles.qrOptionContainer}>
+          <TouchableOpacity style={styles.qrScanBtn} onPress={openScanner}>
+            <Text style={styles.qrScanBtnIcon}>📷</Text>
+            <Text style={styles.qrScanBtnText}>Scan Leader QR Code</Text>
           </TouchableOpacity>
         </View>
 
@@ -329,5 +467,92 @@ const styles = StyleSheet.create({
     color: colors.primary,
     fontSize: 13,
     fontWeight: '700',
+  },
+  demoBanner: {
+    backgroundColor: '#6C3FC5',
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    marginBottom: 4,
+    alignItems: 'center',
+  },
+  demoBannerText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  qrOptionContainer: {
+    marginVertical: 12,
+    alignItems: 'center',
+    width: '100%',
+  },
+  qrScanBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#0A4A6D',
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: 14,
+    width: '100%',
+    shadowColor: '#0A4A6D',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  qrScanBtnIcon: {
+    fontSize: 18,
+    marginRight: 8,
+  },
+  qrScanBtnText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  scannerSafe: {
+    flex: 1,
+    backgroundColor: '#000000',
+  },
+  scannerOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+  },
+  scannerTargetFrame: {
+    width: 250,
+    height: 250,
+    borderWidth: 3,
+    borderColor: '#0A4A6D',
+    borderRadius: 20,
+    backgroundColor: 'transparent',
+    marginBottom: 20,
+    borderStyle: 'dashed',
+  },
+  scannerTip: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    paddingHorizontal: 24,
+    textShadowColor: 'rgba(0,0,0,0.8)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+    marginBottom: 40,
+  },
+  closeScannerBtn: {
+    backgroundColor: 'rgba(255, 255, 255, 0.25)',
+    paddingVertical: 12,
+    paddingHorizontal: 30,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#ffffff',
+  },
+  closeScannerBtnText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: 'bold',
   },
 });

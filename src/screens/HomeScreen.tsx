@@ -1,13 +1,18 @@
 // src/screens/HomeScreen.tsx
-import React from 'react';
+import React, { useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView, StatusBar, ScrollView } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors } from '../theme/colors';
 import { useAuthStore } from '../store/useAuthStore';
+import { requestAllPermissions } from '../utils/permissions';
 
 export function HomeScreen({ navigation }: any) {
   const { user, logout } = useAuthStore();
   const userName = user?.displayName || user?.email?.split('@')[0] || 'Traveler';
+
+  useEffect(() => {
+    requestAllPermissions();
+  }, []);
 
   return (
     <SafeAreaView style={styles.safe}>

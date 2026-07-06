@@ -58,7 +58,7 @@ interface TrackingState {
   resetTracking: () => void;
 }
 
-export const useTrackingStore = create<TrackingState>((set) => ({
+export const useTrackingStore = create<TrackingState>((set, get) => ({
   role: null,
   group: null,
   members: [],
@@ -73,18 +73,46 @@ export const useTrackingStore = create<TrackingState>((set) => ({
 
   setRole: (role) => set({ role }),
   setGroup: (group) => set({ group }),
-  setMyLocation: (location) => set({ myLocation: location }),
 
+  // ── Skip the update if coords haven't moved significantly ──────────────────
+  // GPS fires ~every second even when stationary. Without this guard every
+  // tick re-renders the entire tracking screen even when nothing changed.
+  setMyLocation: (location) => {
+    const prev = get().myLocation;
+    if (prev) {
+      const latDiff = Math.abs(prev.latitude - location.latitude);
+      const lngDiff = Math.abs(prev.longitude - location.longitude);
+      // ~1m = 0.00001 degrees. Skip if moved less than 1m.
+      if (latDiff < 0.00001 && lngDiff < 0.00001) return;
+    }
+    set({ myLocation: location });
+  },
+
+  // ── Only mutate the member that actually changed ───────────────────────────
+  // Always returning a new array from .map() even when nothing changed is
+  // what caused the "maximum update depth exceeded" infinite loop in useGeofence.
+  // Now we check if any field is actually different before touching state.
   updateMemberLocation: (memberId, locationData) =>
-    set((state) => ({
-      members: state.members.map((m) =>
-        m.id === memberId ? { ...m, ...locationData } : m
-      ),
-    })),
+    set((state) => {
+      const existing = state.members.find((m) => m.id === memberId);
+      if (!existing) return state; // Member not found → no change
+
+      // Check if any field would actually change
+      const hasChange = (Object.keys(locationData) as (keyof Member)[]).some(
+        (key) => existing[key] !== (locationData as any)[key]
+      );
+      if (!hasChange) return state; // Nothing changed → skip re-render
+
+      return {
+        members: state.members.map((m) =>
+          m.id === memberId ? { ...m, ...locationData } : m
+        ),
+      };
+    }),
 
   addMember: (member) =>
     set((state) => ({
-      members: [...state.members.filter(m => m.id !== member.id), member],
+      members: [...state.members.filter((m) => m.id !== member.id), member],
     })),
 
   removeMember: (memberId) =>
@@ -95,10 +123,7 @@ export const useTrackingStore = create<TrackingState>((set) => ({
   setIsTracking: (value) => set({ isTracking: value }),
 
   triggerSOS: (memberName) =>
-    set({
-      sosActive: true,
-      sosTriggeredBy: memberName,
-    }),
+    set({ sosActive: true, sosTriggeredBy: memberName }),
 
   clearSOS: () => set({ sosActive: false, sosTriggeredBy: null }),
 

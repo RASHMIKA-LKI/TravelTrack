@@ -5,35 +5,73 @@ import { tcpSocketManager } from '../services/tcpSocketManager';
 import { useTrackingStore } from '../store/useTrackingStore';
 import { alertManager } from '../services/alertManager';
 
-/**
- * Use this hook in the CreateGroup and Scan screens.
- * Wraps Wi-Fi Direct discovery + TCP messaging logic.
- */
 export function useWifiDirect() {
   const setConnectionStatus = useTrackingStore((state) => state.setConnectionStatus);
   const addMember = useTrackingStore((state) => state.addMember);
   const updateMemberLocation = useTrackingStore((state) => state.updateMemberLocation);
   const triggerSOS = useTrackingStore((state) => state.triggerSOS);
   const addMessage = useTrackingStore((state) => state.addMessage);
+  const setIsTracking = useTrackingStore((state) => state.setIsTracking);
 
-  /** LEADER: Start hosting and set up TCP server */
-  const startHosting = useCallback(async () => {
-    setConnectionStatus('connecting');
-    await wifiDirectManager.startHosting();
-    tcpSocketManager.startServer();
-
-    // Handle incoming messages from members
+  // ───────────────────────────────────────────────────────────────────
+  // Shared message handler for the LEADER's TCP server
+  // ───────────────────────────────────────────────────────────────────
+  const setupLeaderMessageHandler = useCallback(() => {
     tcpSocketManager.onMessageReceived = (payload) => {
       if (payload.type === 'LOCATION') {
-        updateMemberLocation(payload.memberId, {
-          latitude: payload.latitude,
-          longitude: payload.longitude,
-          batteryLevel: payload.batteryLevel,
-          lastSeen: payload.timestamp,
-        });
+        const exists = useTrackingStore
+          .getState()
+          .members.some((m) => m.id === payload.memberId);
+
+        if (!exists) {
+          addMember({
+            id: payload.memberId,
+            name: payload.memberName,
+            latitude: payload.latitude,
+            longitude: payload.longitude,
+            batteryLevel: payload.batteryLevel,
+            status: 'safe',
+            lastSeen: payload.timestamp,
+          });
+        } else {
+          updateMemberLocation(payload.memberId, {
+            latitude: payload.latitude,
+            longitude: payload.longitude,
+            batteryLevel: payload.batteryLevel,
+            lastSeen: payload.timestamp,
+          });
+        }
+
+        // Broadcast updated group state to all members
+        const myLoc = useTrackingStore.getState().myLocation;
+        const updatedMembers = useTrackingStore.getState().members;
+        const groupStatePayload = {
+          type: 'GROUP_STATE',
+          members: [
+            ...(myLoc
+              ? [
+                  {
+                    id: 'leader-me',
+                    name: 'Leader',
+                    latitude: myLoc.latitude,
+                    longitude: myLoc.longitude,
+                    batteryLevel: 100,
+                    status: 'safe' as const,
+                    lastSeen: myLoc.timestamp || Date.now(),
+                  },
+                ]
+              : []),
+            ...updatedMembers,
+          ],
+        };
+        tcpSocketManager.broadcast(groupStatePayload);
       } else if (payload.type === 'SOS') {
         triggerSOS(payload.memberName);
-        alertManager.triggerSOSAlert(payload.memberName, payload.latitude, payload.longitude);
+        alertManager.triggerSOSAlert(
+          payload.memberName,
+          payload.latitude,
+          payload.longitude
+        );
       } else if (payload.type === 'CHAT') {
         addMessage({
           senderId: payload.memberId,
@@ -42,47 +80,120 @@ export function useWifiDirect() {
         });
       }
     };
+  }, [addMember, updateMemberLocation, triggerSOS, addMessage]);
 
-    setConnectionStatus('connected');
-  }, [setConnectionStatus, updateMemberLocation, triggerSOS, addMessage]);
+  // ───────────────────────────────────────────────────────────────────
+  // Shared message handler for the MEMBER's TCP client
+  // ───────────────────────────────────────────────────────────────────
+  const setupMemberMessageHandler = useCallback(() => {
+    tcpSocketManager.onMessageReceived = (payload) => {
+      if (payload.type === 'GROUP_STATE') {
+        payload.members?.forEach((m: any) => {
+          const exists = useTrackingStore
+            .getState()
+            .members.some((existing) => existing.id === m.id);
+          if (exists) {
+            updateMemberLocation(m.id, m);
+          } else {
+            addMember({
+              id: m.id,
+              name: m.name,
+              latitude: m.latitude,
+              longitude: m.longitude,
+              batteryLevel: m.batteryLevel ?? 100,
+              status: m.status ?? 'safe',
+              lastSeen: m.lastSeen ?? Date.now(),
+            });
+          }
+        });
+      } else if (payload.type === 'START_TRACKING') {
+        console.log('✅ Leader started tracking — navigating to TrackingScreen');
+        setIsTracking(true);
+      } else if (payload.type === 'ALERT' && payload.reason === 'OUT_OF_RANGE') {
+        alertManager.triggerOutOfRangeAlert('You', payload.distance);
+      } else if (payload.type === 'SOS') {
+        triggerSOS(payload.memberName);
+        alertManager.triggerSOSAlert(
+          payload.memberName,
+          payload.latitude,
+          payload.longitude
+        );
+      } else if (payload.type === 'CHAT') {
+        addMessage({
+          senderId: payload.memberId,
+          senderName: payload.memberName,
+          text: payload.message,
+        });
+      }
+    };
+  }, [updateMemberLocation, addMember, triggerSOS, addMessage, setIsTracking]);
 
-  /** MEMBER: Scan for nearby groups */
+  // ───────────────────────────────────────────────────────────────────
+  // LEADER: Become discoverable + start TCP server
+  // ───────────────────────────────────────────────────────────────────
+  const startHosting = useCallback(async () => {
+    setConnectionStatus('connecting');
+    try {
+      // ✅ Start TCP server FIRST — so it is ready before any member connects
+      tcpSocketManager.stopServer(); // clean up any previous session
+      tcpSocketManager.startServer();
+      setupLeaderMessageHandler();
+
+      // ✅ Make device discoverable via Wi-Fi Direct (NO createGroup call)
+      await wifiDirectManager.startHosting();
+
+      setConnectionStatus('connected');
+      console.log('✅ Hosting started. TCP server running. Waiting for members...');
+    } catch (error) {
+      setConnectionStatus('disconnected');
+      // Stop the server if hosting failed
+      tcpSocketManager.stopServer();
+      throw error;
+    }
+  }, [setConnectionStatus, setupLeaderMessageHandler]);
+
+  // ───────────────────────────────────────────────────────────────────
+  // MEMBER: Scan for nearby hosts
+  // ───────────────────────────────────────────────────────────────────
   const startScanning = useCallback(
     async (onPeersFound: (peers: any[]) => void) => {
       setConnectionStatus('scanning');
-      await wifiDirectManager.startScanning(onPeersFound);
+      try {
+        await wifiDirectManager.startScanning(onPeersFound);
+      } catch (error) {
+        setConnectionStatus('disconnected');
+        throw error;
+      }
     },
     [setConnectionStatus]
   );
 
-  /** MEMBER: Connect to a discovered leader */
+  // ───────────────────────────────────────────────────────────────────
+  // MEMBER: Connect to a discovered leader and start TCP client
+  // ───────────────────────────────────────────────────────────────────
   const connectToLeader = useCallback(
     async (deviceAddress: string) => {
       setConnectionStatus('connecting');
-      const leaderIp = await wifiDirectManager.connectToLeader(deviceAddress);
-      await tcpSocketManager.connectToServer(leaderIp);
+      try {
+        // 1. Form the Wi-Fi Direct connection — returns leader IP (192.168.49.1)
+        const leaderIp = await wifiDirectManager.connectToLeader(deviceAddress);
 
-      // Handle messages from leader
-      tcpSocketManager.onMessageReceived = (payload) => {
-        if (payload.type === 'GROUP_STATE') {
-          payload.members?.forEach((m: any) => updateMemberLocation(m.id, m));
-        } else if (payload.type === 'ALERT' && payload.reason === 'OUT_OF_RANGE') {
-          alertManager.triggerOutOfRangeAlert('You', payload.distance);
-        } else if (payload.type === 'SOS') {
-          triggerSOS(payload.memberName);
-          alertManager.triggerSOSAlert(payload.memberName, payload.latitude, payload.longitude);
-        } else if (payload.type === 'CHAT') {
-          addMessage({
-            senderId: payload.memberId,
-            senderName: payload.memberName,
-            text: payload.message,
-          });
-        }
-      };
+        // 2. Connect TCP client to leader's server
+        tcpSocketManager.disconnect();
+        await tcpSocketManager.connectToServer(leaderIp);
 
-      setConnectionStatus('connected');
+        // 3. Set up message handler
+        setupMemberMessageHandler();
+
+        setConnectionStatus('connected');
+        console.log('✅ Member connected to leader at', leaderIp);
+      } catch (error) {
+        setConnectionStatus('disconnected');
+        tcpSocketManager.disconnect();
+        throw error;
+      }
     },
-    [setConnectionStatus, updateMemberLocation, triggerSOS, addMessage]
+    [setConnectionStatus, setupMemberMessageHandler]
   );
 
   return { startHosting, startScanning, connectToLeader };

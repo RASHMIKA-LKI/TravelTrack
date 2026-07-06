@@ -24,6 +24,13 @@ import { useAuthStore } from '../store/useAuthStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { tcpSocketManager } from '../services/tcpSocketManager';
 import { alertManager } from '../services/alertManager';
+import { useLocation } from '../hooks/useLocation';
+import { useGeofence } from '../hooks/useGeofence';
+import { isDemoMode } from '../utils/isDemoMode';
+import { stopDemo } from '../services/demoService';
+
+const DEMO = isDemoMode();
+
 
 export function TrackingScreen({ navigation }: any) {
   const [activeTab, setActiveTab] = useState<'tracking' | 'messages' | 'emergency' | 'alerts' | 'profile'>('tracking');
@@ -52,6 +59,10 @@ export function TrackingScreen({ navigation }: any) {
   const toggleSound = settings?.toggleSound ?? (() => {});
   const toggleVibration = settings?.toggleVibration ?? (() => {});
 
+  // Start GPS tracking and geofence monitoring when this screen mounts
+  const { startTracking, stopTracking } = useLocation();
+  useGeofence(); // Actively monitors distances and triggers out-of-range alerts
+
   // Radar Animation
   const radarAnim = useRef(new Animated.Value(0)).current;
   // SOS Glow Animation
@@ -59,7 +70,12 @@ export function TrackingScreen({ navigation }: any) {
   const chatListRef = useRef<FlatList>(null);
 
   useEffect(() => {
-    // Start radar rotation
+    // In demo mode GPS is simulated by demoService — skip real GPS tracking
+    if (!DEMO) {
+      startTracking();
+    }
+
+    // Radar rotation
     Animated.loop(
       Animated.timing(radarAnim, {
         toValue: 1,
@@ -69,21 +85,21 @@ export function TrackingScreen({ navigation }: any) {
       })
     ).start();
 
-    // Start SOS pulse
+    // SOS pulse
     Animated.loop(
       Animated.sequence([
-        Animated.timing(glowAnim, {
-          toValue: 1.2,
-          duration: 1000,
-          useNativeDriver: true,
-        }),
-        Animated.timing(glowAnim, {
-          toValue: 1,
-          duration: 1000,
-          useNativeDriver: true,
-        }),
+        Animated.timing(glowAnim, { toValue: 1.2, duration: 1000, useNativeDriver: true }),
+        Animated.timing(glowAnim, { toValue: 1,   duration: 1000, useNativeDriver: true }),
       ])
     ).start();
+
+    return () => {
+      if (DEMO) {
+        stopDemo();
+      } else {
+        stopTracking();
+      }
+    };
   }, []);
 
   // When switching to alerts tab, mark them all as read
@@ -101,26 +117,19 @@ export function TrackingScreen({ navigation }: any) {
   // Calculate badge counts
   const unreadAlertsCount = alerts.filter(a => !a.read).length;
 
-  // Fallback demo members if store is empty
-  const fallbackMembers = [
-    { id: '2', name: 'Sarah Mendis', distance: 12, status: 'safe', emoji: '👩', angle: 45, batteryLevel: 88, isMe: false },
-    { id: '3', name: 'Mike Perera', distance: 42, status: 'warning', emoji: '👨', angle: 180, batteryLevel: 72, isMe: false },
-    { id: '4', name: 'Jack Silva', distance: 68, status: 'out_of_range', emoji: '🧑', angle: 290, batteryLevel: 56, isMe: false },
-  ];
+  // Real members from the store — no demo fallback, show only real connected people
+  const displayMembers = members.map((m, idx) => ({
+    id: m.id,
+    name: m.name,
+    distance: m.latitude && myLocation
+      ? Math.round(calculateDistance(m.latitude, m.longitude, myLocation.latitude, myLocation.longitude))
+      : null,
+    status: m.status,
+    emoji: ['👩', '👨', '🧑', '👧', '👵'][idx % 5],
+    angle: (idx * 110 + 30) % 360,
+    batteryLevel: m.batteryLevel || 90,
+  }));
 
-  const displayMembers = members.length > 0
-    ? members.map((m, idx) => ({
-        id: m.id,
-        name: m.name,
-        distance: m.latitude && myLocation
-          ? Math.round(calculateDistance(m.latitude, m.longitude, myLocation.latitude, myLocation.longitude))
-          : Math.round(15 + idx * 20),
-        status: m.status,
-        emoji: ['👩', '👨', '🧑', '👧', '👵'][idx % 5],
-        angle: (idx * 110 + 30) % 360,
-        batteryLevel: m.batteryLevel || 90,
-      }))
-    : fallbackMembers;
 
   function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
     const R = 6371e3;
@@ -271,7 +280,7 @@ export function TrackingScreen({ navigation }: any) {
                   {/* Member Dots mapped dynamically on radar */}
                   {displayMembers.map((m) => {
                     const maxVisualRadius = 90;
-                    const percentage = Math.min(m.distance / (radiusMeters * 1.2), 1);
+                    const percentage = Math.min((m.distance ?? 0) / (radiusMeters * 1.2), 1);
                     const visualDist = percentage * maxVisualRadius;
                     
                     const radAngle = (m.angle * Math.PI) / 180;
@@ -633,6 +642,13 @@ export function TrackingScreen({ navigation }: any) {
           <Text style={styles.endBtnText}>{role === 'leader' ? 'End' : 'Leave'}</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Demo Mode Banner */}
+      {DEMO && (
+        <View style={styles.demoBanner}>
+          <Text style={styles.demoBannerText}>🎭 DEMO MODE — Simulated group with live GPS movement</Text>
+        </View>
+      )}
 
       {/* Main Tab Render Container */}
       <View style={styles.tabContentContainer}>
@@ -1380,5 +1396,17 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 9,
     fontWeight: 'bold',
+  },
+  demoBanner: {
+    backgroundColor: '#6C3FC5',
+    paddingVertical: 6,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+  },
+  demoBannerText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.3,
   },
 });
