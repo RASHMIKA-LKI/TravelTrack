@@ -7,8 +7,8 @@ import { useAuthStore } from '../store/useAuthStore';
 import { requestAllPermissions } from '../utils/permissions';
 
 export function HomeScreen({ navigation }: any) {
-  const { user, logout } = useAuthStore();
-  const userName = user?.displayName || user?.email?.split('@')[0] || 'Traveler';
+  const { user, logout, isOfflineUser, setSkipToLogin } = useAuthStore();
+  const userName = isOfflineUser ? null : (user?.displayName || user?.email?.split('@')[0] || 'Traveler');
 
   useEffect(() => {
     requestAllPermissions();
@@ -21,11 +21,25 @@ export function HomeScreen({ navigation }: any) {
         <View style={styles.header}>
           <View>
             <Text style={styles.appTitle}>TravelTrack</Text>
-            <Text style={styles.greeting}>Hello, {userName}! 👋</Text>
+            <Text style={styles.greeting}>
+              {isOfflineUser ? 'Hello! 👋' : `Hello, ${userName}! 👋`}
+            </Text>
           </View>
-          <TouchableOpacity style={styles.logoutBtn} onPress={logout}>
-            <Text style={styles.logoutText}>Log Out</Text>
-          </TouchableOpacity>
+          {isOfflineUser ? (
+            <TouchableOpacity
+              style={styles.loginBtn}
+              onPress={async () => {
+                setSkipToLogin(true);
+                await logout();
+              }}
+            >
+              <Text style={styles.loginBtnText}>Log In</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity style={styles.logoutBtn} onPress={logout}>
+              <Text style={styles.logoutText}>Log Out</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         <Text style={styles.sub}>What would you like to do today?</Text>
@@ -154,6 +168,19 @@ const styles = StyleSheet.create({
   },
   logoutText: {
     color: '#EF4444',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  loginBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: colors.primary,
+    backgroundColor: 'rgba(10, 74, 109, 0.07)',
+  },
+  loginBtnText: {
+    color: colors.primary,
     fontSize: 13,
     fontWeight: '700',
   },

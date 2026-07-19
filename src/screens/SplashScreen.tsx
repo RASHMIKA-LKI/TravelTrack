@@ -2,6 +2,7 @@
 import React, { useEffect } from 'react';
 import { View, Text, StyleSheet, StatusBar, Animated } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { colors } from '../theme/colors';
 
 export function SplashScreen({ navigation }: any) {
@@ -24,8 +25,14 @@ export function SplashScreen({ navigation }: any) {
       })
     ]).start();
 
-    const timer = setTimeout(() => {
-      navigation.replace('Onboarding');
+    const timer = setTimeout(async () => {
+      // Skip Onboarding if user has already seen it before
+      const hasSeen = await AsyncStorage.getItem('@TravelTrack:hasSeenOnboarding');
+      if (hasSeen === 'true') {
+        navigation.replace('Login');
+      } else {
+        navigation.replace('Onboarding');
+      }
     }, 2500);
 
     return () => clearTimeout(timer);
