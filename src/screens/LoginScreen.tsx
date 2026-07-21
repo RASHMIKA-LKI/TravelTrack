@@ -57,35 +57,6 @@ export function LoginScreen({ navigation }: any) {
 
   return (
     <SafeAreaView style={styles.safe}>
-      {/* Offline Mode badge — top-right of screen */}
-      <TouchableOpacity
-        style={styles.offlineBadge}
-        onPress={handleGuest}
-        disabled={isLoading}
-        activeOpacity={0.75}
-      >
-        {/* Cloud-off SVG icon matching the design */}
-        <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
-          <Path
-            d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 0 1 2.5 8.2"
-            stroke={colors.primary}
-            strokeWidth={2}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-          <Line
-            x1="2"
-            y1="2"
-            x2="22"
-            y2="22"
-            stroke={colors.primary}
-            strokeWidth={2}
-            strokeLinecap="round"
-          />
-        </Svg>
-        <Text style={styles.offlineBadgeText}>Offline Mode</Text>
-      </TouchableOpacity>
-
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={{ flex: 1 }}
@@ -212,6 +183,20 @@ export function LoginScreen({ navigation }: any) {
               )}
             </TouchableOpacity>
 
+            <View style={styles.divider}>
+              <View style={styles.line} />
+              <Text style={styles.dividerText}>or</Text>
+              <View style={styles.line} />
+            </View>
+
+            <TouchableOpacity
+              style={styles.outlineButton}
+              onPress={handleGuest}
+              disabled={isLoading}
+            >
+              <Text style={styles.outlineText}>Continue as Guest</Text>
+            </TouchableOpacity>
+
             <TouchableOpacity
               onPress={() => {
                 setIsSignUp(!isSignUp);
@@ -235,27 +220,6 @@ const styles = StyleSheet.create({
   safe: {
     flex: 1,
     backgroundColor: '#ffffff',
-  },
-  offlineBadge: {
-    position: 'absolute',
-    top: 52,
-    right: 20,
-    zIndex: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(10, 74, 109, 0.06)',
-    borderWidth: 1.5,
-    borderColor: 'rgba(10, 74, 109, 0.25)',
-    borderRadius: 12,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    gap: 6,
-  },
-  offlineBadgeText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: colors.primary,
-    letterSpacing: 0.1,
   },
   scrollContainer: {
     flexGrow: 1,
