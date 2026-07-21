@@ -94,7 +94,7 @@ export const authService = {
    */
   signIn: async (email: string, password: string): Promise<User> => {
     try {
-      const result = await signInWithEmailAndPassword(auth, email, password);
+      const result = await signInWithEmailAndPassword(auth, email.trim(), password);
       return result.user;
     } catch (error) {
       throw new Error(getAuthErrorMessage(error));
