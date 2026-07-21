@@ -10,7 +10,6 @@ import {
   signOut,
   updateProfile,
   sendPasswordResetEmail,
-  sendEmailVerification,
   deleteUser,
   reauthenticateWithCredential,
   linkWithCredential,
@@ -143,50 +142,6 @@ export const authService = {
     }
   },
 
-  // ─── Email Verification ───────────────────────────────────────────────────
-
-  /**
-   * Send a verification email to the currently signed-in user.
-   * Uses Firebase's built-in email service — no third-party provider needed.
-   * The email comes from noreply@<your-project>.firebaseapp.com.
-   *
-   * Call this after sign-up to verify the user's email address.
-   * The user clicks the link in the email, then call refreshEmailVerified()
-   * or reload the user to update `user.emailVerified`.
-   */
-  sendVerificationEmail: async (): Promise<void> => {
-    const user = auth.currentUser;
-    if (!user) throw new Error('No user is currently signed in.');
-    if (user.emailVerified) return; // Already verified — no-op
-
-    try {
-      await sendEmailVerification(user);
-    } catch (error) {
-      throw new Error(getAuthErrorMessage(error));
-    }
-  },
-
-  /**
-   * Check whether the current user's email is verified.
-   * Returns false if no user is signed in or if the user is anonymous.
-   */
-  isEmailVerified: (): boolean => {
-    const user = auth.currentUser;
-    if (!user || user.isAnonymous) return false;
-    return user.emailVerified;
-  },
-
-  /**
-   * Reload the current user's data from Firebase to get the latest
-   * emailVerified status. Call this after the user clicks the
-   * verification link in their email.
-   */
-  reloadUser: async (): Promise<void> => {
-    const user = auth.currentUser;
-    if (!user) throw new Error('No user is currently signed in.');
-    await user.reload();
-  },
-
   // ─── Anonymous → Permanent Account Linking ────────────────────────────────
 
   /**
@@ -194,7 +149,6 @@ export const authService = {
    * This preserves the user's UID and all their data — no data loss.
    *
    * After linking, the user can log in with email/password on any device.
-   * Also sends a verification email automatically.
    *
    * @param email - The email to link to the account
    * @param password - The password for the new permanent account
@@ -217,11 +171,6 @@ export const authService = {
       const credential = EmailAuthProvider.credential(email.trim(), password);
       const result = await linkWithCredential(user, credential);
       await updateProfile(result.user, { displayName: displayName.trim() });
-
-      // Send verification email for the newly linked email (non-blocking)
-      sendEmailVerification(result.user).catch(() => {
-        // Silently ignore — verification email is nice-to-have, not critical
-      });
 
       return result.user;
     } catch (error) {

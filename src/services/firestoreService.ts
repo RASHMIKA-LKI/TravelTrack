@@ -30,7 +30,6 @@ export interface UserProfile {
   createdAt: number;
   totalTrips: number;
   updatedAt?: Timestamp | FieldValue;  // Timestamp when read, FieldValue when written
-  emailVerified?: boolean;             // Synced from Firebase Auth
 }
 
 // ─── Firestore Error Helper ───────────────────────────────────────────────────

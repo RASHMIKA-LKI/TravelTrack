@@ -18,8 +18,6 @@ type AuthAction =
   | 'logout'
   | 'resetPassword'
   | 'deleteAccount'
-  | 'sendVerificationEmail'
-  | 'refreshEmailVerified'
   | 'linkAnonymousAccount';
 
 interface AuthState {
@@ -27,7 +25,6 @@ interface AuthState {
   isLoading: boolean;                 // True if ANY action is loading (backward compat for UI)
   loadingAction: AuthAction | null;   // WHICH specific action is loading (null = idle)
   isLoggedIn: boolean;                // Shortcut: true if user !== null
-  isEmailVerified: boolean;           // Whether the user has verified their email
   error: string | null;               // Human-readable error message to display in the UI
 
   // ─── Actions ─────────────────────────────────────────────────────────────
@@ -38,8 +35,6 @@ interface AuthState {
   logout: () => Promise<void>;
   resetPassword: (email: string) => Promise<boolean>;
   deleteAccount: (password?: string) => Promise<boolean>;
-  sendVerificationEmail: () => Promise<boolean>;
-  refreshEmailVerified: () => Promise<void>;
   linkAnonymousAccount: (email: string, password: string, name: string) => Promise<boolean>;
   clearError: () => void;
 }
@@ -53,7 +48,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   isLoading: true,        // Start as true — Firebase needs a moment to restore the session
   loadingAction: 'initialize',
   isLoggedIn: false,
-  isEmailVerified: false,
   error: null,
 
   /**
@@ -69,7 +63,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({
         user,
         isLoggedIn: !!user,
-        isEmailVerified: user?.emailVerified ?? false,
         isLoading: false,
         loadingAction: null,
       });
@@ -84,7 +77,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({
         user,
         isLoggedIn: true,
-        isEmailVerified: user.emailVerified ?? false,
         loadingAction: null,
         isLoading: false,
       });
@@ -106,13 +98,15 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   register: async (email, password, name) => {
     set({ loadingAction: 'register', isLoading: true, error: null });
     try {
-      const user = await authService.signUp(email, password, name);
+      const normalizedEmail = email.trim();
+      const normalizedName = name.trim();
+      const user = await authService.signUp(normalizedEmail, password, normalizedName);
 
       // Save profile to Firestore — await it so we don't silently lose data
       try {
         await firestoreService.saveUserProfile(user.uid, {
-          name,
-          email,
+          name: normalizedName,
+          email: normalizedEmail,
           createdAt: Date.now(),
         });
       } catch (profileErr: unknown) {
@@ -123,7 +117,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({
         user,
         isLoggedIn: true,
-        isEmailVerified: true,
         loadingAction: null,
         isLoading: false,
       });
@@ -145,7 +138,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({
         user,
         isLoggedIn: true,
-        isEmailVerified: false,
         loadingAction: null,
         isLoading: false,
       });
@@ -170,7 +162,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({
       user: null,
       isLoggedIn: false,
-      isEmailVerified: false,
       loadingAction: null,
       isLoading: false,
     });
@@ -220,7 +211,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({
         user: null,
         isLoggedIn: false,
-        isEmailVerified: false,
         loadingAction: null,
         isLoading: false,
       });
@@ -236,44 +226,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
 
-  // ─── Email Verification ───────────────────────────────────────────────────
-
-  /**
-   * Send a verification email to the current user.
-   * Returns true if sent successfully, false otherwise.
-   */
-  sendVerificationEmail: async () => {
-    set({ loadingAction: 'sendVerificationEmail', isLoading: true, error: null });
-    try {
-      await authService.sendVerificationEmail();
-      if (get().loadingAction === 'sendVerificationEmail') {
-        set({ loadingAction: null, isLoading: false });
-      }
-      return true;
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'An unexpected error occurred.';
-      if (get().loadingAction === 'sendVerificationEmail') {
-        set({ error: message, loadingAction: null, isLoading: false });
-      } else {
-        set({ error: message });
-      }
-      return false;
-    }
-  },
-
-  /**
-   * Reload the user from Firebase and update isEmailVerified status.
-   */
-  refreshEmailVerified: async () => {
-    try {
-      await authService.reloadUser();
-      const verified = authService.isEmailVerified();
-      set({ isEmailVerified: verified });
-    } catch (err: unknown) {
-      console.warn('Failed to refresh email verification status:', err);
-    }
-  },
-
   // ─── Anonymous → Permanent Account Linking ────────────────────────────────
 
   /**
@@ -283,13 +235,19 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   linkAnonymousAccount: async (email: string, password: string, name: string) => {
     set({ loadingAction: 'linkAnonymousAccount', isLoading: true, error: null });
     try {
-      const user = await authService.linkAnonymousAccount(email, password, name);
+      const normalizedEmail = email.trim();
+      const normalizedName = name.trim();
+      const user = await authService.linkAnonymousAccount(
+        normalizedEmail,
+        password,
+        normalizedName
+      );
 
       // Save profile to Firestore
       try {
         await firestoreService.saveUserProfile(user.uid, {
-          name,
-          email,
+          name: normalizedName,
+          email: normalizedEmail,
           createdAt: Date.now(),
         });
       } catch (profileErr: unknown) {
@@ -299,7 +257,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({
         user,
         isLoggedIn: true,
-        isEmailVerified: false,
         loadingAction: null,
         isLoading: false,
       });
