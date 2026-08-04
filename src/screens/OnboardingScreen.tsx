@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, StatusBar, Dimensions } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { colors } from '../theme/colors';
 
 const { width } = Dimensions.get('window');
@@ -36,11 +37,17 @@ const slides = [
 export function OnboardingScreen({ navigation }: any) {
   const [currentIndex, setCurrentIndex] = useState(0);
 
+  /** Mark onboarding as done so it never shows again, then go to Login */
+  const finishOnboarding = async () => {
+    await AsyncStorage.setItem('@TravelTrack:hasSeenOnboarding', 'true');
+    navigation.replace('Login');
+  };
+
   const goNext = () => {
     if (currentIndex < slides.length - 1) {
       setCurrentIndex(currentIndex + 1);
     } else {
-      navigation.replace('Login');
+      finishOnboarding();
     }
   };
 
@@ -53,7 +60,7 @@ export function OnboardingScreen({ navigation }: any) {
       {/* Top Header */}
       <View style={styles.header}>
         <View />
-        <TouchableOpacity style={styles.skipBtn} onPress={() => navigation.replace('Login')}>
+        <TouchableOpacity style={styles.skipBtn} onPress={finishOnboarding}>
           <Text style={styles.skipText}>Skip</Text>
         </TouchableOpacity>
       </View>
@@ -94,7 +101,7 @@ export function OnboardingScreen({ navigation }: any) {
       <View style={styles.footer}>
         <TouchableOpacity 
           style={styles.skipBtnBottom} 
-          onPress={() => navigation.replace('Login')}
+          onPress={finishOnboarding}
         >
           <Text style={styles.skipBtnTextBottom}>Skip</Text>
         </TouchableOpacity>
