@@ -111,6 +111,9 @@ class WifiDirectManager {
     if (this.isInitialized) {
       try { await p2pCall('cancelConnect'); } catch (_) {}
       try { await p2pCall('stopDiscoveringPeers'); } catch (_) {}
+      // Reset initialized flag so ensureInitialized() re-runs cleanly next time.
+      // This prevents the P2P manager from getting stuck in a partially-broken state.
+      this.isInitialized = false;
     }
     console.log('🧹 Wi-Fi Direct reset.');
   }
@@ -130,13 +133,25 @@ class WifiDirectManager {
     // Initialize first before calling any reset operations
     await this.ensureInitialized();
     await this.resetFramework();
-    await sleep(500);
+    // Re-init after reset since isInitialized was cleared
+    await this.ensureInitialized();
+    // Give Android P2P framework time to fully settle after reset
+    await sleep(800);
 
     try {
       await p2pCall('startDiscoveringPeers');
       console.log('✅ Leader is now discoverable via Wi-Fi Direct.');
     } catch (e: any) {
-      console.warn('startDiscoveringPeers warning (non-fatal):', e?.message);
+      // Android can return BUSY (error code 2) if the framework is still resetting.
+      // Retry once after a short delay before giving up.
+      console.warn('⚠️ startDiscoveringPeers BUSY on leader, retrying in 1.5s...', e?.message);
+      await sleep(1500);
+      try {
+        await p2pCall('startDiscoveringPeers');
+        console.log('✅ Leader is now discoverable via Wi-Fi Direct (retry).');
+      } catch (e2: any) {
+        console.warn('startDiscoveringPeers warning (non-fatal after retry):', e2?.message);
+      }
     }
   }
 
@@ -159,9 +174,19 @@ class WifiDirectManager {
     // Initialize first before calling any reset operations
     await this.ensureInitialized();
     await this.resetFramework();
-    await sleep(300);
+    // Re-init after reset since isInitialized was cleared
+    await this.ensureInitialized();
+    // Increased from 300ms to 800ms for Android 9 P2P framework stability
+    await sleep(800);
 
-    await p2pCall('startDiscoveringPeers');
+    // Try starting peer discovery with automatic retry if Android P2P framework is BUSY
+    try {
+      await p2pCall('startDiscoveringPeers');
+    } catch (e: any) {
+      console.warn('⚠️ Wi-Fi Direct framework busy, retrying in 1s...', e?.message);
+      await sleep(1000);
+      await p2pCall('startDiscoveringPeers');
+    }
 
     // subscribeOnPeersUpdates returns an EventEmitter subscription with .remove()
     const p2pMod = getP2P();

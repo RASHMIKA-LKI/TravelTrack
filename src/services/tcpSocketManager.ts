@@ -115,7 +115,10 @@ class TcpSocketManagerReal {
 
     this.server.on('error', (err: any) => {
       console.error('TCP Server error:', err?.message);
+      // Mark server as stopped immediately so the next startServer() call
+      // doesn't think it is still running and skip the guard.
       this._serverRunning = false;
+      if (this.server) { try { this.server.close(); } catch (_) {} this.server = null; }
     });
   }
 
@@ -147,7 +150,21 @@ class TcpSocketManagerReal {
     const RawTcpSocket = require('react-native-tcp-socket');
     const TcpSocket = RawTcpSocket.default || RawTcpSocket;
     return new Promise((resolve, reject) => {
+      let settled = false;
+
+      // 15-second timeout so we never hang forever if the leader is unreachable
+      const timer = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          this.disconnect();
+          reject(new Error('TCP connection timed out (15s). Make sure the leader device is running and nearby.'));
+        }
+      }, 15000);
+
       this.client = TcpSocket.createConnection({ port: PORT, host: leaderIp }, () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
         this._clientConnected = true;
         console.log('✅ Connected to leader TCP server!');
         resolve();
@@ -160,7 +177,11 @@ class TcpSocketManagerReal {
       this.client.on('error', (err: any) => {
         console.error('Client TCP error:', err?.message);
         this._clientConnected = false;
-        reject(err);
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          reject(err);
+        }
       });
     });
   }
