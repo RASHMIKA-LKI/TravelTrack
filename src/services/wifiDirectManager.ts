@@ -133,17 +133,22 @@ class WifiDirectManager {
     // Initialize first before calling any reset operations
     await this.ensureInitialized();
     await this.resetFramework();
-    // Re-init after reset since isInitialized was cleared
     await this.ensureInitialized();
-    // Give Android P2P framework time to fully settle after reset
     await sleep(800);
 
     try {
+      // 1. Create P2P Group Owner mode on Leader
+      await p2pCall('createGroup');
+      console.log('✅ Leader Wi-Fi Direct group created.');
+    } catch (e: any) {
+      console.warn('createGroup note (may already exist or fallback):', e?.message);
+    }
+
+    try {
+      // 2. Make Leader discoverable over P2P
       await p2pCall('startDiscoveringPeers');
       console.log('✅ Leader is now discoverable via Wi-Fi Direct.');
     } catch (e: any) {
-      // Android can return BUSY (error code 2) if the framework is still resetting.
-      // Retry once after a short delay before giving up.
       console.warn('⚠️ startDiscoveringPeers BUSY on leader, retrying in 1.5s...', e?.message);
       await sleep(1500);
       try {
@@ -157,11 +162,14 @@ class WifiDirectManager {
 
   async stopHosting(): Promise<void> {
     if (isDemoMode()) return;
+    try { await p2pCall('removeGroup'); } catch (_) {}
     await this.resetFramework();
     console.log('Leader stopped hosting.');
   }
 
   // ── MEMBER ────────────────────────────────────────────────────────────────
+
+  private scanInterval: any = null;
 
   async startScanning(onPeersFound: (peers: any[]) => void): Promise<void> {
     if (isDemoMode()) return; // ScanScreen uses DEMO_PEERS directly
@@ -171,34 +179,57 @@ class WifiDirectManager {
       throw new Error('Location permission is required to scan for nearby devices.');
     }
 
-    // Initialize first before calling any reset operations
     await this.ensureInitialized();
     await this.resetFramework();
-    // Re-init after reset since isInitialized was cleared
     await this.ensureInitialized();
-    // Increased from 300ms to 800ms for Android 9 P2P framework stability
     await sleep(800);
 
-    // Try starting peer discovery with automatic retry if Android P2P framework is BUSY
     try {
       await p2pCall('startDiscoveringPeers');
     } catch (e: any) {
       console.warn('⚠️ Wi-Fi Direct framework busy, retrying in 1s...', e?.message);
       await sleep(1000);
-      await p2pCall('startDiscoveringPeers');
+      try { await p2pCall('startDiscoveringPeers'); } catch (_) {}
     }
 
-    // subscribeOnPeersUpdates returns an EventEmitter subscription with .remove()
+    const fetchPeers = async () => {
+      try {
+        const peersObj = await p2pCall('getAvailablePeers');
+        const list = Array.isArray(peersObj) ? peersObj : (peersObj?.devices || []);
+        if (list && list.length > 0) {
+          console.log(`📡 getAvailablePeers found ${list.length} device(s).`);
+          onPeersFound(list);
+        }
+      } catch (err) {
+        console.warn('getAvailablePeers fetch error:', err);
+      }
+    };
+
     const p2pMod = getP2P();
     const mod = p2pMod.default || p2pMod;
-    this.peersSubscription = mod.subscribeOnPeersUpdates(({ devices }: any) => {
-      console.log(`Found ${devices.length} nearby device(s).`);
-      onPeersFound(devices);
+
+    this.peersSubscription = mod.subscribeOnPeersUpdates((data: any) => {
+      const devicesList = Array.isArray(data) ? data : (data?.devices || []);
+      console.log(`Found ${devicesList.length} nearby device(s) via event.`);
+      if (devicesList.length > 0) {
+        onPeersFound(devicesList);
+      } else {
+        fetchPeers();
+      }
     });
+
+    // Poll getAvailablePeers every 1.5 seconds while scanning
+    if (this.scanInterval) clearInterval(this.scanInterval);
+    this.scanInterval = setInterval(fetchPeers, 1500);
+    fetchPeers();
   }
 
   async stopScanning(): Promise<void> {
     if (isDemoMode()) return;
+    if (this.scanInterval) {
+      clearInterval(this.scanInterval);
+      this.scanInterval = null;
+    }
     try { await p2pCall('stopDiscoveringPeers'); } catch (_) {}
     this.peersSubscription = this.removeSub(this.peersSubscription);
   }

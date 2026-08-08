@@ -67,12 +67,17 @@ export function ScanScreen({ navigation }: any) {
     try {
       await startScanning(async (foundPeers) => {
         latestPeers = foundPeers;
-        if (connected) return;
+        if (connected || !foundPeers || foundPeers.length === 0) return;
 
-        // Search for a peer containing the scanned model/name (case-insensitive)
-        const targetPeer = foundPeers.find(p =>
-          p.deviceName && p.deviceName.toUpperCase().includes(scannedModel.toUpperCase())
-        );
+        // Search for target peer:
+        // 1. Exact or partial string match between Wi-Fi Direct name and QR model string
+        // 2. Fallback: If only 1 peer is broadcasting nearby, assume it's the leader!
+        const targetPeer = foundPeers.find(p => {
+          if (!p || !p.deviceName) return false;
+          const name = p.deviceName.toUpperCase();
+          const target = scannedModel.toUpperCase();
+          return name.includes(target) || target.includes(name);
+        }) || (foundPeers.length === 1 ? foundPeers[0] : null);
 
         if (targetPeer) {
           connected = true;
