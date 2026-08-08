@@ -14,9 +14,13 @@ import {
 import { colors } from '../theme/colors';
 import { useTrackingStore } from '../store/useTrackingStore';
 import { alertManager } from '../services/alertManager';
+import { tcpSocketManager } from '../services/tcpSocketManager';
 
 export function SOSScreen({ navigation }: any) {
   const triggerSOS = useTrackingStore((state) => state.triggerSOS);
+  const myLocation = useTrackingStore((state) => state.myLocation);
+  const myDeviceId = useTrackingStore((state) => state.myDeviceId);
+  const role = useTrackingStore((state) => state.role);
   const glowAnim = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
@@ -50,7 +54,27 @@ export function SOSScreen({ navigation }: any) {
 
     // Call alert manager triggers for audio/vibration loops
     if (alertManager && alertManager.triggerSOSAlert) {
-      alertManager.triggerSOSAlert('You', 0, 0);
+      alertManager.triggerSOSAlert('You', myLocation?.latitude || 0, myLocation?.longitude || 0);
+    }
+
+    // ✅ BUG FIX: Send SOS over TCP to all other devices
+    try {
+      const sosPayload = {
+        type: 'SOS',
+        memberId: myDeviceId,
+        memberName: 'You',
+        latitude: myLocation?.latitude || 0,
+        longitude: myLocation?.longitude || 0,
+        message: 'SOS emergency alert!',
+        timestamp: Date.now(),
+      };
+      if (role === 'leader' && tcpSocketManager.broadcast) {
+        tcpSocketManager.broadcast(sosPayload);
+      } else if (role === 'member' && tcpSocketManager.send) {
+        tcpSocketManager.send(sosPayload);
+      }
+    } catch (e) {
+      console.warn('Failed to send SOS over TCP:', e);
     }
   };
 

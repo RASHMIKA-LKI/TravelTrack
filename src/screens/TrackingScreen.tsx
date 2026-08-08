@@ -28,6 +28,7 @@ import { useLocation } from '../hooks/useLocation';
 import { useGeofence } from '../hooks/useGeofence';
 import { isDemoMode } from '../utils/isDemoMode';
 import { stopDemo } from '../services/demoService';
+import { SOSOverlay } from '../components/SOSOverlay';
 
 const DEMO = isDemoMode();
 
@@ -48,6 +49,9 @@ export function TrackingScreen({ navigation }: any) {
   const alerts = useTrackingStore((state) => state.alerts);
   const markAlertsRead = useTrackingStore((state) => state.markAlertsRead);
   const triggerSOS = useTrackingStore((state) => state.triggerSOS);
+  const myDeviceId = useTrackingStore((state) => state.myDeviceId);
+  const addAlert = useTrackingStore((state) => state.addAlert);
+  const setMeetupPoint = useTrackingStore((state) => state.setMeetupPoint);
 
   const { user } = useAuthStore();
   const userName = user?.displayName || user?.email?.split('@')[0] || 'Alex Johnson';
@@ -180,7 +184,7 @@ export function TrackingScreen({ navigation }: any) {
     if (!inputText.trim()) return;
 
     const payload = {
-      senderId: 'me',
+      senderId: myDeviceId,
       senderName: 'You',
       text: inputText,
     };
@@ -193,7 +197,7 @@ export function TrackingScreen({ navigation }: any) {
       if (tcpSocketManager) {
         const payloadData = {
           type: 'CHAT',
-          memberId: 'me',
+          memberId: myDeviceId,
           memberName: userName,
           message: inputText,
           timestamp: Date.now(),
@@ -215,6 +219,64 @@ export function TrackingScreen({ navigation }: any) {
     }, 100);
   };
 
+  // ----- Meetup Point broadcast function -----
+  const handleSendMeetup = () => {
+    if (!myLocation) {
+      Alert.alert('Location Not Available', 'Your GPS location has not been acquired yet. Please wait.');
+      return;
+    }
+
+    Alert.prompt
+      ? Alert.prompt(
+          '📌 Set Meetup Point',
+          'Enter a name for the meetup location:',
+          (meetupName) => {
+            if (!meetupName?.trim()) return;
+            broadcastMeetup(meetupName.trim());
+          },
+          'plain-text',
+          '',
+          'default'
+        )
+      : // Fallback for Android (no Alert.prompt)
+        broadcastMeetup('Meetup Point');
+  };
+
+  const broadcastMeetup = (meetupName: string) => {
+    const meetup = {
+      name: meetupName,
+      latitude: myLocation!.latitude,
+      longitude: myLocation!.longitude,
+      setBy: userName,
+      timestamp: Date.now(),
+    };
+
+    // Save locally
+    setMeetupPoint(meetup);
+    addAlert({
+      type: 'meetup',
+      memberName: userName,
+      message: `You set meetup point: "${meetupName}"`,
+    });
+
+    // Broadcast over TCP
+    try {
+      const payload = {
+        type: 'MEETUP_POINT',
+        ...meetup,
+      };
+      if (role === 'leader' && tcpSocketManager.broadcast) {
+        tcpSocketManager.broadcast(payload);
+      } else if (role === 'member' && tcpSocketManager.send) {
+        tcpSocketManager.send(payload);
+      }
+    } catch (e) {
+      console.warn('Failed to broadcast meetup point:', e);
+    }
+
+    Alert.alert('📌 Meetup Sent!', `Meetup point "${meetupName}" has been broadcast to all group members.`);
+  };
+
   // ----- SOS send function -----
   const handleSOS = () => {
     Alert.alert(
@@ -229,6 +291,26 @@ export function TrackingScreen({ navigation }: any) {
 
     if (alertManager && alertManager.triggerSOSAlert) {
       alertManager.triggerSOSAlert('You', myLocation?.latitude || 0, myLocation?.longitude || 0);
+    }
+
+    // ✅ BUG FIX: Actually send SOS over TCP to other devices
+    try {
+      const sosPayload = {
+        type: 'SOS',
+        memberId: myDeviceId,
+        memberName: userName,
+        latitude: myLocation?.latitude || 0,
+        longitude: myLocation?.longitude || 0,
+        message: 'SOS emergency alert!',
+        timestamp: Date.now(),
+      };
+      if (role === 'leader' && tcpSocketManager.broadcast) {
+        tcpSocketManager.broadcast(sosPayload);
+      } else if (role === 'member' && tcpSocketManager.send) {
+        tcpSocketManager.send(sosPayload);
+      }
+    } catch (e) {
+      console.warn('Failed to send SOS over TCP:', e);
     }
   };
 
@@ -310,7 +392,7 @@ export function TrackingScreen({ navigation }: any) {
             <View style={styles.quickActionsContainer}>
               <TouchableOpacity
                 style={styles.meetupActionBtn}
-                onPress={() => Alert.alert('Broadcast Meetup', 'Meetup point broadcast to all members.')}
+                onPress={handleSendMeetup}
               >
                 <Text style={styles.actionBtnIcon}>📌</Text>
                 <Text style={styles.actionBtnText}>Send Meetup</Text>
@@ -333,7 +415,7 @@ export function TrackingScreen({ navigation }: any) {
               id: msg.id,
               senderName: msg.senderName,
               text: msg.text,
-              mine: msg.senderId === 'me',
+              mine: msg.senderId === myDeviceId,
             }))
           : [
               { id: '1', senderName: 'Sarah Mendis', text: 'Everyone ready to head out?', mine: false },
@@ -688,6 +770,9 @@ export function TrackingScreen({ navigation }: any) {
           );
         })}
       </View>
+
+      {/* ✅ SOS Overlay — shows full-screen red alert when another device sends SOS */}
+      <SOSOverlay />
     </SafeAreaView>
   );
 }

@@ -39,13 +39,15 @@ export function useLocation() {
     // fire before the TCP connection is established.
     if (connectionStatus !== 'connected') return;
 
+    const myDeviceId = useTrackingStore.getState().myDeviceId;
+
     if (role === 'member') {
       // Guard: only send if the TCP client is actually connected
       if (!tcpSocketManager.isClientConnected) return;
 
       const payload = {
         type: 'LOCATION',
-        memberId: 'me',
+        memberId: myDeviceId,
         memberName: userName,
         latitude: myLocation.latitude,
         longitude: myLocation.longitude,
@@ -65,7 +67,7 @@ export function useLocation() {
         type: 'GROUP_STATE',
         members: [
           {
-            id: 'leader-me',
+            id: myDeviceId,
             name: userName + ' (Leader)',
             latitude: myLocation.latitude,
             longitude: myLocation.longitude,

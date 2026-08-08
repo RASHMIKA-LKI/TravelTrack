@@ -21,6 +21,7 @@ export function ChatScreen({ navigation }: any) {
   const messages = useTrackingStore((state) => state.messages);
   const addMessage = useTrackingStore((state) => state.addMessage);
   const role = useTrackingStore((state) => state.role);
+  const myDeviceId = useTrackingStore((state) => state.myDeviceId);
   const flatListRef = useRef<FlatList>(null);
 
   // Fallback/Demo messages if list is empty
@@ -36,7 +37,7 @@ export function ChatScreen({ navigation }: any) {
         senderName: msg.senderName,
         text: msg.text,
         time: new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        mine: msg.senderId === 'me',
+        mine: msg.senderId === myDeviceId,
       }))
     : fallbackMessages.map(msg => ({
         id: msg.id,
@@ -50,7 +51,7 @@ export function ChatScreen({ navigation }: any) {
     if (!inputText.trim()) return;
 
     const payload = {
-      senderId: 'me',
+      senderId: myDeviceId,
       senderName: 'You',
       text: inputText,
     };
@@ -64,7 +65,7 @@ export function ChatScreen({ navigation }: any) {
       if (tcpSocketManager) {
         const payloadData = {
           type: 'CHAT',
-          memberId: 'me',
+          memberId: myDeviceId,
           memberName: 'You',
           message: inputText,
           timestamp: Date.now(),

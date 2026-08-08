@@ -87,39 +87,47 @@ class TcpSocketManagerReal {
     const RawTcpSocket = require('react-native-tcp-socket');
     const TcpSocket = RawTcpSocket.default || RawTcpSocket;
 
-    this.server = TcpSocket.createServer((socket: any) => {
-      console.log('✅ A member connected via TCP!');
-      socket.id = Date.now();
-      this.connectedSockets.push(socket);
-      if (this.onMemberConnected) this.onMemberConnected(socket.id);
+    const createAndListen = (retryCount: number) => {
+      this.server = TcpSocket.createServer((socket: any) => {
+        console.log('✅ A member connected via TCP!');
+        socket.id = Date.now();
+        this.connectedSockets.push(socket);
+        if (this.onMemberConnected) this.onMemberConnected(socket.id);
 
-      const handleData = makeMessageHandler((payload) => {
-        if (this.onMessageReceived) this.onMessageReceived(payload);
+        const handleData = makeMessageHandler((payload) => {
+          if (this.onMessageReceived) this.onMessageReceived(payload);
+        });
+        socket.on('data', handleData);
+        socket.on('close', () => {
+          this.connectedSockets = this.connectedSockets.filter(s => s.id !== socket.id);
+          if (this.onMemberDisconnected) this.onMemberDisconnected(socket.id);
+          console.log('Member disconnected. Remaining sockets:', this.connectedSockets.length);
+        });
+        socket.on('error', (err: any) => {
+          console.error('Member socket error:', err?.message);
+          this.connectedSockets = this.connectedSockets.filter(s => s.id !== socket.id);
+        });
       });
-      socket.on('data', handleData);
-      socket.on('close', () => {
-        this.connectedSockets = this.connectedSockets.filter(s => s.id !== socket.id);
-        if (this.onMemberDisconnected) this.onMemberDisconnected(socket.id);
-        console.log('Member disconnected. Remaining sockets:', this.connectedSockets.length);
-      });
-      socket.on('error', (err: any) => {
-        console.error('Member socket error:', err?.message);
-        this.connectedSockets = this.connectedSockets.filter(s => s.id !== socket.id);
-      });
-    });
 
-    this.server.listen({ port: PORT, host: '0.0.0.0' }, () => {
-      this._serverRunning = true;
-      console.log(`✅ TCP Server listening on port ${PORT}`);
-    });
+      this.server.listen({ port: PORT, host: '0.0.0.0' }, () => {
+        this._serverRunning = true;
+        console.log(`✅ TCP Server listening on port ${PORT}`);
+      });
 
-    this.server.on('error', (err: any) => {
-      console.error('TCP Server error:', err?.message);
-      // Mark server as stopped immediately so the next startServer() call
-      // doesn't think it is still running and skip the guard.
-      this._serverRunning = false;
-      if (this.server) { try { this.server.close(); } catch (_) {} this.server = null; }
-    });
+      this.server.on('error', (err: any) => {
+        console.error('TCP Server error:', err?.message);
+        this._serverRunning = false;
+        if (this.server) { try { this.server.close(); } catch (_) {} this.server = null; }
+
+        // ✅ Retry once if port was still in use from a previous session
+        if (retryCount < 1 && err?.message?.includes('EADDRINUSE')) {
+          console.log('🔄 Port in use — retrying server start in 1.5s...');
+          setTimeout(() => createAndListen(retryCount + 1), 1500);
+        }
+      });
+    };
+
+    createAndListen(0);
   }
 
   broadcast(payload: any): void {

@@ -111,11 +111,16 @@ class WifiDirectManager {
     if (this.isInitialized) {
       try { await p2pCall('cancelConnect'); } catch (_) {}
       try { await p2pCall('stopDiscoveringPeers'); } catch (_) {}
+      // ✅ BUG FIX: Always remove old group to prevent "Host Not Found" on reconnect.
+      // Without this, the previous Wi-Fi Direct group persists in Android's framework
+      // and createGroup() silently fails on the second attempt.
+      try { await p2pCall('removeGroup'); } catch (_) {}
+      // Wait for Android Wi-Fi Direct framework to fully release resources
+      await sleep(600);
       // Reset initialized flag so ensureInitialized() re-runs cleanly next time.
-      // This prevents the P2P manager from getting stuck in a partially-broken state.
       this.isInitialized = false;
     }
-    console.log('🧹 Wi-Fi Direct reset.');
+    console.log('🧹 Wi-Fi Direct reset (group removed).');
   }
 
   // ── LEADER ────────────────────────────────────────────────────────────────

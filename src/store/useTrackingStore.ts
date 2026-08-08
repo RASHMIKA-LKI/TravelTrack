@@ -1,6 +1,12 @@
 // src/store/useTrackingStore.ts
 import { create } from 'zustand';
+import { Platform } from 'react-native';
 import { Member, Group } from '../types/models';
+
+// Generate a unique device ID per session so messages from this device
+// can be distinguished from messages received from other devices.
+// Using device model + random suffix ensures uniqueness across two phones.
+const DEVICE_ID = `${Platform.OS}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 interface LocationData {
   latitude: number;
@@ -20,6 +26,14 @@ interface Alert {
   read: boolean;
 }
 
+interface MeetupPoint {
+  name: string;
+  latitude: number;
+  longitude: number;
+  setBy: string;
+  timestamp: number;
+}
+
 interface ChatMessage {
   id: string;
   senderId: string;
@@ -29,6 +43,7 @@ interface ChatMessage {
 }
 
 interface TrackingState {
+  myDeviceId: string;
   role: 'leader' | 'member' | null;
   group: Group | null;
   members: Member[];
@@ -40,6 +55,7 @@ interface TrackingState {
   alerts: Alert[];
   messages: ChatMessage[];
   radiusMeters: number;
+  meetupPoint: MeetupPoint | null;
 
   setRole: (role: 'leader' | 'member') => void;
   setGroup: (group: Group) => void;
@@ -55,10 +71,12 @@ interface TrackingState {
   markAlertsRead: () => void;
   addMessage: (message: Omit<ChatMessage, 'id' | 'timestamp'>) => void;
   setRadius: (meters: number) => void;
+  setMeetupPoint: (point: MeetupPoint) => void;
   resetTracking: () => void;
 }
 
 export const useTrackingStore = create<TrackingState>((set, get) => ({
+  myDeviceId: DEVICE_ID,
   role: null,
   group: null,
   members: [],
@@ -70,6 +88,7 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
   alerts: [],
   messages: [],
   radiusMeters: 50,
+  meetupPoint: null,
 
   setRole: (role) => set({ role }),
   setGroup: (group) => set({ group }),
@@ -161,6 +180,8 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
 
   setRadius: (meters) => set({ radiusMeters: meters }),
 
+  setMeetupPoint: (point) => set({ meetupPoint: point }),
+
   resetTracking: () =>
     set({
       role: null,
@@ -173,5 +194,6 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
       connectionStatus: 'disconnected',
       alerts: [],
       messages: [],
+      meetupPoint: null,
     }),
 }));

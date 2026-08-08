@@ -45,13 +45,14 @@ export function useWifiDirect() {
         // Broadcast updated group state to all members
         const myLoc = useTrackingStore.getState().myLocation;
         const updatedMembers = useTrackingStore.getState().members;
+        const myDeviceId = useTrackingStore.getState().myDeviceId;
         const groupStatePayload = {
           type: 'GROUP_STATE',
           members: [
             ...(myLoc
               ? [
                   {
-                    id: 'leader-me',
+                    id: myDeviceId,
                     name: 'Leader',
                     latitude: myLoc.latitude,
                     longitude: myLoc.longitude,
@@ -72,12 +73,35 @@ export function useWifiDirect() {
           payload.latitude,
           payload.longitude
         );
+        // ✅ BUG FIX: Re-broadcast SOS to all other members so everyone gets it
+        tcpSocketManager.broadcast(payload);
       } else if (payload.type === 'CHAT') {
+        // Add to leader's local messages (shows on the left since senderId != leader's myDeviceId)
         addMessage({
           senderId: payload.memberId,
           senderName: payload.memberName,
           text: payload.message,
         });
+        // ✅ BUG FIX: Relay chat to all connected members so everyone sees it
+        tcpSocketManager.broadcast(payload);
+      } else if (payload.type === 'MEETUP_POINT') {
+        // ✅ NEW: Handle meetup point from member
+        const { setMeetupPoint, addAlert } = useTrackingStore.getState();
+        setMeetupPoint({
+          name: payload.name,
+          latitude: payload.latitude,
+          longitude: payload.longitude,
+          setBy: payload.setBy,
+          timestamp: Date.now(),
+        });
+        addAlert({
+          type: 'meetup',
+          memberName: payload.setBy,
+          message: `${payload.setBy} set meetup point: "${payload.name}"`,
+        });
+        alertManager.triggerReturnAlert(payload.setBy); // Short vibration notification
+        // Broadcast to all members
+        tcpSocketManager.broadcast(payload);
       }
     };
   }, [addMember, updateMemberLocation, triggerSOS, addMessage]);
@@ -119,11 +143,30 @@ export function useWifiDirect() {
           payload.longitude
         );
       } else if (payload.type === 'CHAT') {
+        // ✅ BUG FIX: Skip if this is our own message being echoed back by the leader
+        const myDeviceId = useTrackingStore.getState().myDeviceId;
+        if (payload.memberId === myDeviceId) return; // Don't duplicate our own message
         addMessage({
           senderId: payload.memberId,
           senderName: payload.memberName,
           text: payload.message,
         });
+      } else if (payload.type === 'MEETUP_POINT') {
+        // ✅ NEW: Handle meetup point broadcast from leader
+        const { setMeetupPoint, addAlert } = useTrackingStore.getState();
+        setMeetupPoint({
+          name: payload.name,
+          latitude: payload.latitude,
+          longitude: payload.longitude,
+          setBy: payload.setBy,
+          timestamp: Date.now(),
+        });
+        addAlert({
+          type: 'meetup',
+          memberName: payload.setBy,
+          message: `${payload.setBy} set meetup point: "${payload.name}"`,
+        });
+        alertManager.triggerReturnAlert(payload.setBy); // Short vibration notification
       }
     };
   }, [updateMemberLocation, addMember, triggerSOS, addMessage, setIsTracking]);
