@@ -1,5 +1,5 @@
 // src/screens/SettingsScreen.tsx
-import React from 'react';
+import React from "react";
 import {
   View,
   Text,
@@ -9,11 +9,10 @@ import {
   TouchableOpacity,
   ScrollView,
   StatusBar,
-  Alert,
-} from 'react-native';
-import { colors } from '../theme/colors';
-import { useSettingsStore } from '../store/useSettingsStore';
-import { useAuthStore } from '../store/useAuthStore';
+} from "react-native";
+import { colors } from "../theme/colors";
+import { useSettingsStore } from "../store/useSettingsStore";
+import { useAuthStore } from "../store/useAuthStore";
 
 export function SettingsScreen({ navigation }: any) {
   const settings = useSettingsStore();
@@ -30,28 +29,15 @@ export function SettingsScreen({ navigation }: any) {
   const setGpsInterval = settings?.setGpsInterval ?? (() => {});
   const setDefaultRadius = settings?.setDefaultRadius ?? (() => {});
 
-  const handleLogout = () => {
-    Alert.alert('Confirm Logout', 'Are you sure you want to log out of TravelTrack?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Log Out',
-        style: 'destructive',
-        onPress: () => {
-          if (logout) {
-            logout();
-          }
-          navigation.replace('Login');
-        },
-      },
-    ]);
-  };
-
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
       <View style={styles.container}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
+          <TouchableOpacity
+            onPress={() => navigation.goBack()}
+            style={styles.backBtn}
+          >
             <Text style={styles.backText}>← Back</Text>
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Settings</Text>
@@ -64,13 +50,15 @@ export function SettingsScreen({ navigation }: any) {
             <View style={styles.settingRow}>
               <View style={styles.settingInfo}>
                 <Text style={styles.settingLabel}>Sound Alerts</Text>
-                <Text style={styles.settingDesc}>Play warning siren and safety return sounds</Text>
+                <Text style={styles.settingDesc}>
+                  Play warning siren and safety return sounds
+                </Text>
               </View>
               <Switch
                 value={soundEnabled}
                 onValueChange={toggleSound}
-                trackColor={{ false: '#D0D0D0', true: colors.primaryLight }}
-                thumbColor={soundEnabled ? colors.primary : '#F4F3F4'}
+                trackColor={{ false: "#D0D0D0", true: colors.primaryLight }}
+                thumbColor={soundEnabled ? colors.primary : "#F4F3F4"}
               />
             </View>
 
@@ -79,13 +67,15 @@ export function SettingsScreen({ navigation }: any) {
             <View style={styles.settingRow}>
               <View style={styles.settingInfo}>
                 <Text style={styles.settingLabel}>Vibration Alerts</Text>
-                <Text style={styles.settingDesc}>Vibrate device on boundary warning triggers</Text>
+                <Text style={styles.settingDesc}>
+                  Vibrate device on boundary warning triggers
+                </Text>
               </View>
               <Switch
                 value={vibrationEnabled}
                 onValueChange={toggleVibration}
-                trackColor={{ false: '#D0D0D0', true: colors.primaryLight }}
-                thumbColor={vibrationEnabled ? colors.primary : '#F4F3F4'}
+                trackColor={{ false: "#D0D0D0", true: colors.primaryLight }}
+                thumbColor={vibrationEnabled ? colors.primary : "#F4F3F4"}
               />
             </View>
           </View>
@@ -93,18 +83,28 @@ export function SettingsScreen({ navigation }: any) {
           <Text style={styles.sectionTitle}>GPS Configuration</Text>
           <View style={styles.card}>
             <Text style={styles.settingLabel}>Location Sync Frequency</Text>
-            <Text style={styles.settingDesc}>Frequency at which device GPS uploads coordinates</Text>
-            
+            <Text style={styles.settingDesc}>
+              Frequency at which device GPS uploads coordinates
+            </Text>
+
             <View style={styles.btnRow}>
               {[2000, 3000, 5000, 10000].map((interval) => {
                 const active = gpsIntervalMs === interval;
                 return (
                   <TouchableOpacity
                     key={interval}
-                    style={[styles.optionBtn, active ? styles.optionBtnActive : null]}
+                    style={[
+                      styles.optionBtn,
+                      active ? styles.optionBtnActive : null,
+                    ]}
                     onPress={() => setGpsInterval(interval)}
                   >
-                    <Text style={[styles.optionBtnText, active ? styles.optionBtnTextActive : null]}>
+                    <Text
+                      style={[
+                        styles.optionBtnText,
+                        active ? styles.optionBtnTextActive : null,
+                      ]}
+                    >
                       {interval / 1000}s
                     </Text>
                   </TouchableOpacity>
@@ -116,18 +116,28 @@ export function SettingsScreen({ navigation }: any) {
           <Text style={styles.sectionTitle}>Geofence Configuration</Text>
           <View style={styles.card}>
             <Text style={styles.settingLabel}>Default Safe Radius</Text>
-            <Text style={styles.settingDesc}>Initial safe boundary radius applied when hosting trips</Text>
-            
+            <Text style={styles.settingDesc}>
+              Initial safe boundary radius applied when hosting trips
+            </Text>
+
             <View style={styles.btnRow}>
               {[25, 50, 75, 100].map((r) => {
                 const active = defaultRadiusMeters === r;
                 return (
                   <TouchableOpacity
                     key={r}
-                    style={[styles.optionBtn, active ? styles.optionBtnActive : null]}
+                    style={[
+                      styles.optionBtn,
+                      active ? styles.optionBtnActive : null,
+                    ]}
                     onPress={() => setDefaultRadius(r)}
                   >
-                    <Text style={[styles.optionBtnText, active ? styles.optionBtnTextActive : null]}>
+                    <Text
+                      style={[
+                        styles.optionBtnText,
+                        active ? styles.optionBtnTextActive : null,
+                      ]}
+                    >
                       {r}m
                     </Text>
                   </TouchableOpacity>
@@ -137,14 +147,22 @@ export function SettingsScreen({ navigation }: any) {
           </View>
 
           <Text style={styles.sectionTitle}>Account</Text>
-          <TouchableOpacity style={styles.logoutCard} onPress={handleLogout} activeOpacity={0.8}>
+          <TouchableOpacity
+            style={styles.logoutCard}
+            onPress={logout}
+            activeOpacity={0.8}
+          >
             <Text style={styles.logoutText}>Log Out Account</Text>
             <Text style={styles.logoutIcon}>🚪</Text>
           </TouchableOpacity>
 
           <View style={styles.footer}>
-            <Text style={styles.footerText}>TravelTrack — Version 1.0.0 (Beta)</Text>
-            <Text style={styles.footerText}>Keep your friends close, keep them safe.</Text>
+            <Text style={styles.footerText}>
+              TravelTrack — Version 1.0.0 (Beta)
+            </Text>
+            <Text style={styles.footerText}>
+              Keep your friends close, keep them safe.
+            </Text>
           </View>
         </ScrollView>
       </View>
@@ -155,19 +173,19 @@ export function SettingsScreen({ navigation }: any) {
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: '#ffffff',
+    backgroundColor: "#ffffff",
   },
   container: {
     flex: 1,
     paddingHorizontal: 24,
   },
   header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
     paddingVertical: 16,
     borderBottomWidth: 1,
-    borderColor: '#F0F0F0',
+    borderColor: "#F0F0F0",
   },
   backBtn: {
     paddingVertical: 8,
@@ -175,12 +193,12 @@ const styles = StyleSheet.create({
   backText: {
     color: colors.primary,
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   headerTitle: {
     fontSize: 20,
-    fontWeight: 'bold',
-    color: '#1A1A1A',
+    fontWeight: "bold",
+    color: "#1A1A1A",
   },
   scroll: {
     flex: 1,
@@ -188,26 +206,26 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     fontSize: 14,
-    fontWeight: 'bold',
-    color: '#888888',
-    textTransform: 'uppercase',
+    fontWeight: "bold",
+    color: "#888888",
+    textTransform: "uppercase",
     letterSpacing: 0.5,
     marginTop: 20,
     marginBottom: 10,
     marginLeft: 4,
   },
   card: {
-    backgroundColor: '#F9F9F9',
+    backgroundColor: "#F9F9F9",
     borderRadius: 16,
     padding: 16,
     borderWidth: 1,
-    borderColor: '#F0F0F0',
+    borderColor: "#F0F0F0",
     marginBottom: 8,
   },
   settingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
   },
   settingInfo: {
     flex: 1,
@@ -215,74 +233,74 @@ const styles = StyleSheet.create({
   },
   settingLabel: {
     fontSize: 16,
-    fontWeight: 'bold',
-    color: '#1A1A1A',
+    fontWeight: "bold",
+    color: "#1A1A1A",
   },
   settingDesc: {
     fontSize: 12,
-    color: '#666666',
+    color: "#666666",
     marginTop: 3,
     lineHeight: 16,
   },
   divider: {
     height: 1,
-    backgroundColor: '#EAEAEA',
+    backgroundColor: "#EAEAEA",
     marginVertical: 16,
   },
   btnRow: {
-    flexDirection: 'row',
+    flexDirection: "row",
     gap: 8,
     marginTop: 16,
   },
   optionBtn: {
     flex: 1,
-    backgroundColor: '#ffffff',
+    backgroundColor: "#ffffff",
     borderWidth: 1.5,
-    borderColor: '#E0E0E0',
+    borderColor: "#E0E0E0",
     borderRadius: 10,
     paddingVertical: 10,
-    alignItems: 'center',
+    alignItems: "center",
   },
   optionBtnActive: {
     borderColor: colors.primary,
-    backgroundColor: '#E8F5F2',
+    backgroundColor: "#E8F5F2",
   },
   optionBtnText: {
     fontSize: 13,
-    fontWeight: 'bold',
-    color: '#666666',
+    fontWeight: "bold",
+    color: "#666666",
   },
   optionBtnTextActive: {
     color: colors.primary,
   },
   logoutCard: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: '#FFEBEE',
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    backgroundColor: "#FFEBEE",
     borderRadius: 16,
     padding: 16,
     borderWidth: 1,
-    borderColor: '#FFCDD2',
+    borderColor: "#FFCDD2",
     marginTop: 8,
     marginBottom: 20,
   },
   logoutText: {
-    color: '#C62828',
+    color: "#C62828",
     fontSize: 16,
-    fontWeight: 'bold',
+    fontWeight: "bold",
   },
   logoutIcon: {
     fontSize: 18,
   },
   footer: {
-    alignItems: 'center',
+    alignItems: "center",
     marginVertical: 24,
     gap: 4,
   },
   footerText: {
-    color: '#BBBBBB',
+    color: "#BBBBBB",
     fontSize: 11,
-    fontWeight: '600',
+    fontWeight: "600",
   },
 });

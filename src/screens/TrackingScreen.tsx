@@ -753,7 +753,7 @@ export function TrackingScreen({ navigation }: any) {
       <Modal visible={menuVisible} transparent animationType="fade" onRequestClose={() => setMenuVisible(false)}>
         <TouchableOpacity style={styles.menuBackdrop} activeOpacity={1} onPress={() => setMenuVisible(false)}>
           <TouchableOpacity activeOpacity={1} style={styles.menuPanel}>
-            <Text style={styles.menuTitle}>Navigate</Text>
+            <Text style={styles.menuTitle}>Menu</Text>
             {menuItems.map((item) => (
               <TouchableOpacity key={item.key} style={styles.menuItem} onPress={item.action} activeOpacity={0.75}>
                 <Text style={styles.menuItemIcon}>{item.icon}</Text>
