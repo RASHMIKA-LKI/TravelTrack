@@ -16,6 +16,7 @@ import {
   FlatList,
   KeyboardAvoidingView,
   Platform,
+  Modal,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors } from '../theme/colors';
@@ -36,6 +37,7 @@ const DEMO = isDemoMode();
 export function TrackingScreen({ navigation }: any) {
   const [activeTab, setActiveTab] = useState<'tracking' | 'messages' | 'emergency' | 'alerts' | 'profile'>('tracking');
   const [inputText, setInputText] = useState('');
+  const [menuVisible, setMenuVisible] = useState(false);
   
   // Zustand State
   const group = useTrackingStore((state) => state.group);
@@ -707,6 +709,20 @@ export function TrackingScreen({ navigation }: any) {
     }
   };
 
+  const openMenuTab = (tab: 'tracking' | 'messages' | 'emergency' | 'alerts' | 'profile') => {
+    setActiveTab(tab);
+    setMenuVisible(false);
+  };
+
+  const menuItems = [
+    { key: 'tracking', label: 'Tracking', icon: '📍', action: () => openMenuTab('tracking') },
+    { key: 'messages', label: 'Messages', icon: '💬', action: () => openMenuTab('messages') },
+    { key: 'emergency', label: 'Emergency', icon: '🚨', action: () => openMenuTab('emergency') },
+    { key: 'alerts', label: 'Alerts', icon: '🔔', action: () => openMenuTab('alerts') },
+    { key: 'profile', label: 'Profile', icon: '👤', action: () => openMenuTab('profile') },
+    { key: 'settings', label: 'Settings', icon: '⚙️', action: () => { setMenuVisible(false); navigation.navigate('Settings'); } },
+  ];
+
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar barStyle="light-content" backgroundColor="#0A4A6D" />
@@ -714,7 +730,9 @@ export function TrackingScreen({ navigation }: any) {
       {/* Universal Header */}
       <View style={styles.header}>
         <View style={styles.headerLeft}>
-          <Text style={styles.headerMenuIcon}>☰</Text>
+          <TouchableOpacity onPress={() => setMenuVisible(true)} style={styles.headerMenuButton} activeOpacity={0.8}>
+            <Text style={styles.headerMenuIcon}>☰</Text>
+          </TouchableOpacity>
           <View style={styles.headerTitleWrapper}>
             <Text style={styles.headerTitle}>{getHeaderTitle()}</Text>
             <Text style={styles.headerSubtitle}>{getHeaderSubtitle()}</Text>
@@ -731,6 +749,20 @@ export function TrackingScreen({ navigation }: any) {
           <Text style={styles.demoBannerText}>🎭 DEMO MODE — Simulated group with live GPS movement</Text>
         </View>
       )}
+
+      <Modal visible={menuVisible} transparent animationType="fade" onRequestClose={() => setMenuVisible(false)}>
+        <TouchableOpacity style={styles.menuBackdrop} activeOpacity={1} onPress={() => setMenuVisible(false)}>
+          <TouchableOpacity activeOpacity={1} style={styles.menuPanel}>
+            <Text style={styles.menuTitle}>Navigate</Text>
+            {menuItems.map((item) => (
+              <TouchableOpacity key={item.key} style={styles.menuItem} onPress={item.action} activeOpacity={0.75}>
+                <Text style={styles.menuItemIcon}>{item.icon}</Text>
+                <Text style={styles.menuItemLabel}>{item.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
 
       {/* Main Tab Render Container */}
       <View style={styles.tabContentContainer}>
@@ -803,6 +835,10 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontWeight: 'bold',
   },
+  headerMenuButton: {
+    padding: 6,
+    marginLeft: -6,
+  },
   headerTitleWrapper: {
     justifyContent: 'center',
   },
@@ -829,6 +865,48 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 12,
     fontWeight: 'bold',
+  },
+  menuBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.35)',
+  },
+  menuPanel: {
+    width: 290,
+    maxWidth: '82%',
+    height: '100%',
+    backgroundColor: '#ffffff',
+    paddingTop: 64,
+    paddingHorizontal: 18,
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  menuTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0A4A6D',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    marginBottom: 18,
+  },
+  menuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    marginBottom: 8,
+    backgroundColor: '#F8FAFC',
+  },
+  menuItemIcon: {
+    fontSize: 18,
+    marginRight: 12,
+  },
+  menuItemLabel: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#1E293B',
   },
   tabContentContainer: {
     flex: 1,
