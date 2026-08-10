@@ -14,12 +14,46 @@ export function useWifiDirect() {
   const addMessage = useTrackingStore((state) => state.addMessage);
   const setIsTracking = useTrackingStore((state) => state.setIsTracking);
 
+  const broadcastGroupState = useCallback(() => {
+    const state = useTrackingStore.getState();
+    const leader = useAuthStore.getState().user;
+    const leaderName = leader?.displayName || leader?.email?.split('@')[0] || 'Group Leader';
+    const leaderMember = state.myLocation
+      ? [{
+          id: state.myDeviceId,
+          name: leaderName,
+          latitude: state.myLocation.latitude,
+          longitude: state.myLocation.longitude,
+          accuracy: state.myLocation.accuracy,
+          status: 'safe' as const,
+          lastSeen: state.myLocation.timestamp || Date.now(),
+          isLeader: true,
+        }]
+      : [];
+    tcpSocketManager.broadcast({ type: 'GROUP_STATE', members: [...leaderMember, ...state.members] });
+  }, []);
+
   // ───────────────────────────────────────────────────────────────────
   // Shared message handler for the LEADER's TCP server
   // ───────────────────────────────────────────────────────────────────
   const setupLeaderMessageHandler = useCallback(() => {
     tcpSocketManager.onMessageReceived = (payload) => {
-      if (payload.type === 'LOCATION') {
+      if (payload.type === 'JOIN') {
+        const exists = useTrackingStore.getState().members.some((m) => m.id === payload.memberId);
+        if (!exists) {
+          addMember({
+            id: payload.memberId,
+            name: payload.memberName || 'Member',
+            latitude: 0,
+            longitude: 0,
+            status: 'safe',
+            lastSeen: payload.timestamp || Date.now(),
+          });
+        }
+        // The lobby must reflect a successful TCP handshake immediately;
+        // location updates only begin after tracking starts.
+        broadcastGroupState();
+      } else if (payload.type === 'LOCATION') {
         const exists = useTrackingStore
           .getState()
           .members.some((m) => m.id === payload.memberId);
@@ -45,34 +79,7 @@ export function useWifiDirect() {
           });
         }
 
-        // Broadcast updated group state to all members
-        const myLoc = useTrackingStore.getState().myLocation;
-        const updatedMembers = useTrackingStore.getState().members;
-        const myDeviceId = useTrackingStore.getState().myDeviceId;
-        const leader = useAuthStore.getState().user;
-        const leaderName = leader?.displayName || leader?.email?.split('@')[0] || 'Group Leader';
-        const groupStatePayload = {
-          type: 'GROUP_STATE',
-          members: [
-            ...(myLoc
-              ? [
-                  {
-                    id: myDeviceId,
-                    name: leaderName,
-                    latitude: myLoc.latitude,
-                    longitude: myLoc.longitude,
-                    accuracy: myLoc.accuracy,
-                    batteryLevel: 100,
-                    status: 'safe' as const,
-                    lastSeen: myLoc.timestamp || Date.now(),
-                    isLeader: true,
-                  },
-                ]
-              : []),
-            ...updatedMembers,
-          ],
-        };
-        tcpSocketManager.broadcast(groupStatePayload);
+        broadcastGroupState();
       } else if (payload.type === 'SOS') {
         triggerSOS(payload.memberName);
         alertManager.triggerSOSAlert(
@@ -111,7 +118,7 @@ export function useWifiDirect() {
         tcpSocketManager.broadcast(payload);
       }
     };
-  }, [addMember, updateMemberLocation, triggerSOS, addMessage]);
+  }, [addMember, updateMemberLocation, triggerSOS, addMessage, broadcastGroupState]);
 
   // ───────────────────────────────────────────────────────────────────
   // Shared message handler for the MEMBER's TCP client
@@ -132,7 +139,7 @@ export function useWifiDirect() {
               latitude: m.latitude,
               longitude: m.longitude,
               accuracy: m.accuracy,
-              batteryLevel: m.batteryLevel ?? 100,
+              batteryLevel: m.batteryLevel,
               status: m.status ?? 'safe',
               lastSeen: m.lastSeen ?? Date.now(),
               isLeader: m.isLeader || m.name === 'Leader',
@@ -142,6 +149,12 @@ export function useWifiDirect() {
       } else if (payload.type === 'START_TRACKING') {
         console.log('✅ Leader started tracking — navigating to TrackingScreen');
         setIsTracking(true);
+      } else if (payload.type === 'END_GROUP') {
+        // A leader's end action is authoritative for the local-only group.
+        // Clear state and radio resources so members do not remain on a stale radar.
+        tcpSocketManager.disconnect();
+        void wifiDirectManager.leaveGroup();
+        useTrackingStore.getState().resetTracking();
       } else if (payload.type === 'ALERT' && payload.reason === 'OUT_OF_RANGE') {
         alertManager.triggerOutOfRangeAlert('You', payload.distance || 50);
       } else if (payload.type === 'ALERT_OUT_OF_RANGE') {
@@ -200,7 +213,7 @@ export function useWifiDirect() {
       tcpSocketManager.startServer();
       setupLeaderMessageHandler();
 
-      // ✅ Make device discoverable via Wi-Fi Direct (NO createGroup call)
+      // Create the Group Owner before advertising the lobby as ready.
       await wifiDirectManager.startHosting();
 
       setConnectionStatus('connected');
@@ -239,12 +252,24 @@ export function useWifiDirect() {
         // 1. Form the Wi-Fi Direct connection — returns leader IP (192.168.49.1)
         const leaderIp = await wifiDirectManager.connectToLeader(deviceAddress);
 
+        // Install the handler before opening TCP so an immediate GROUP_STATE
+        // reply cannot be missed on fast phones.
+        setupMemberMessageHandler();
+
         // 2. Connect TCP client to leader's server
         tcpSocketManager.disconnect();
         await tcpSocketManager.connectToServer(leaderIp);
 
-        // 3. Set up message handler
-        setupMemberMessageHandler();
+        // 3. Make the handshake explicit. The leader can now show this member
+        // in its lobby before either device has a GPS reading.
+        const user = useAuthStore.getState().user;
+        const state = useTrackingStore.getState();
+        tcpSocketManager.send({
+          type: 'JOIN',
+          memberId: state.myDeviceId,
+          memberName: user?.displayName || user?.email?.split('@')[0] || 'Guest',
+          timestamp: Date.now(),
+        });
 
         setConnectionStatus('connected');
         console.log('✅ Member connected to leader at', leaderIp);

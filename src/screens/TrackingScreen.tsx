@@ -23,6 +23,7 @@ import { useTrackingStore } from '../store/useTrackingStore';
 import { useAuthStore } from '../store/useAuthStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { tcpSocketManager } from '../services/tcpSocketManager';
+import { wifiDirectManager } from '../services/wifiDirectManager';
 import { alertManager } from '../services/alertManager';
 import { useLocation } from '../hooks/useLocation';
 import { useGeofence } from '../hooks/useGeofence';
@@ -59,6 +60,7 @@ export function TrackingScreen({ navigation }: any) {
   const myDeviceId = useTrackingStore((state) => state.myDeviceId);
   const addAlert = useTrackingStore((state) => state.addAlert);
   const setMeetupPoint = useTrackingStore((state) => state.setMeetupPoint);
+  const isTracking = useTrackingStore((state) => state.isTracking);
 
   const { user } = useAuthStore();
   const guestDefault = `Guest (${Platform.OS === 'android' ? (Platform.constants as any)?.Model || 'Traveler' : 'Traveler'})`;
@@ -121,6 +123,12 @@ export function TrackingScreen({ navigation }: any) {
     }
   }, [activeTab]);
 
+  // An END_GROUP message clears the member store. Do not leave a member on a
+  // radar whose local group no longer exists.
+  useEffect(() => {
+    if (!isTracking) navigation.replace('Home');
+  }, [isTracking, navigation]);
+
   const spin = radarAnim.interpolate({
     inputRange: [0, 1],
     outputRange: ['0deg', '360deg'],
@@ -143,21 +151,31 @@ export function TrackingScreen({ navigation }: any) {
       ? m.longitude
       : m.lastKnownLongitude;
 
-    const hasLocation = Boolean(
+    const rawHasLocation = Boolean(
       myLocation &&
       Number.isFinite(targetLat) &&
       Number.isFinite(targetLng) &&
       !(targetLat === 0 && targetLng === 0)
     );
-    const gpsDistance = hasLocation
+    const gpsDistance = rawHasLocation
       ? calculateDistance(myLocation!.latitude, myLocation!.longitude, targetLat!, targetLng!)
       : 0;
     const accuracyMargin = Math.round(Math.max(0, myLocation?.accuracy || 0) + Math.max(0, m.accuracy || 0));
+    const localTimestamp = myLocation?.timestamp || 0;
+    const memberTimestamp = m.lastSeen || m.lastKnownTimestamp || 0;
+    const synchronizedSamples = Boolean(
+      localTimestamp && memberTimestamp && Math.abs(localTimestamp - memberTimestamp) <= 12_000
+    );
+    // A valid, fresh peer position must remain visible to the group. Accuracy
+    // affects how confidently we label its bearing, not whether the traveller
+    // disappears from the safety radar altogether.
+    const hasLocation = rawHasLocation && synchronizedSamples;
+    const hasReliableBearing = hasLocation && gpsDistance > accuracyMargin;
 
-    const bearing = hasLocation
+    const bearing = rawHasLocation
       ? calculateBearing(myLocation!.latitude, myLocation!.longitude, targetLat!, targetLng!)
       : 0;
-    const cardinal = getCardinalDirection(bearing);
+    const cardinal = hasReliableBearing ? getCardinalDirection(bearing) : 'GPS uncertain';
 
     const ringIndex = getRadarRingIndex(gpsDistance, radiusMeters);
 
@@ -179,7 +197,8 @@ export function TrackingScreen({ navigation }: any) {
       cardinal,
       ringIndex,
       lastKnownTime: m.lastKnownTimestamp || m.lastSeen,
-      batteryLevel: m.batteryLevel || 90,
+      synchronizedSamples,
+      hasReliableBearing,
     };
   });
 
@@ -195,6 +214,16 @@ export function TrackingScreen({ navigation }: any) {
           text: 'Leave',
           style: 'destructive',
           onPress: async () => {
+            if (role === 'leader') {
+              try {
+                tcpSocketManager.broadcast({ type: 'END_GROUP', timestamp: Date.now() });
+                // Give buffered TCP writes a chance to reach members before the
+                // Group Owner and server are stopped.
+                await new Promise<void>((resolve) => setTimeout(resolve, 250));
+              } catch (error) {
+                console.warn('Could not notify all members that the group ended:', error);
+              }
+            }
             if (role === 'leader' && user && group) {
               try {
                 await firestoreService.saveTripAndIncrementCount(user.uid, {
@@ -211,6 +240,9 @@ export function TrackingScreen({ navigation }: any) {
                 );
               }
             }
+            tcpSocketManager.disconnect();
+            tcpSocketManager.stopServer();
+            await wifiDirectManager.leaveGroup();
             if (resetTracking) resetTracking();
             navigation.replace('Home');
           },
@@ -462,6 +494,7 @@ export function TrackingScreen({ navigation }: any) {
                             backgroundColor: getStatusColor(m.status),
                             borderColor: isOutOfRange ? '#EF4444' : '#FFFFFF',
                             borderWidth: isOutOfRange ? 2.5 : 2,
+                            opacity: m.hasReliableBearing ? 1 : 0.72,
                           },
                         ]}
                       >
@@ -479,7 +512,7 @@ export function TrackingScreen({ navigation }: any) {
 
               {/* Radar Ring Legend */}
               <Text style={styles.radarAccuracyNote}>
-                Distance is approximate (combined GPS accuracy ±{Math.round(myLocation?.accuracy || 0)}m plus each member's reported accuracy).
+                Each recent peer location is shown. “GPS uncertain” means the distance is smaller than the current GPS margin.
               </Text>
               <View style={styles.radarLegendRow}>
                 <View style={styles.legendItem}>
@@ -804,7 +837,9 @@ export function TrackingScreen({ navigation }: any) {
   const getHeaderSubtitle = () => {
     switch (activeTab) {
       case 'tracking':
-        return myLocation ? 'Times Square, NYC' : 'Active Connection';
+        return myLocation
+          ? `GPS accuracy ±${Math.round(myLocation.accuracy || 0)}m`
+          : 'Waiting for a GPS fix';
       case 'messages':
         return 'chat with your friends';
       case 'emergency':

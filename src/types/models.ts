@@ -11,7 +11,8 @@ export interface Member {
   name: string;
   latitude: number;
   longitude: number;
-  batteryLevel: number;
+  /** Battery is optional because the offline transport does not read it. */
+  batteryLevel?: number;
   status: 'safe' | 'warning' | 'out_of_range' | 'sos';
   lastSeen: number;
   isLeader?: boolean;

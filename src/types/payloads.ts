@@ -2,7 +2,7 @@
 export type PayloadType =
   | 'JOIN' | 'WELCOME' | 'LOCATION' | 'GROUP_STATE'
   | 'ALERT' | 'SOS' | 'CHAT' | 'MEETUP_POINT'
-  | 'MEMBER_LEFT' | 'KICK' | 'ALERT_OUT_OF_RANGE';
+  | 'MEMBER_LEFT' | 'KICK' | 'ALERT_OUT_OF_RANGE' | 'END_GROUP';
 
 export interface LocationPayload {
   type: 'LOCATION';
@@ -13,7 +13,7 @@ export interface LocationPayload {
   accuracy: number;
   bearing: number;
   speed: number;
-  batteryLevel: number;
+  batteryLevel?: number;
   timestamp: number;
 }
 

@@ -13,13 +13,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../theme/colors';
 import { useTrackingStore } from '../store/useTrackingStore';
 import { tcpSocketManager } from '../services/tcpSocketManager';
+import { wifiDirectManager } from '../services/wifiDirectManager';
 import { isDemoMode } from '../utils/isDemoMode';
-import { Platform } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
-import * as Device from 'expo-device';
 
 const DEMO = isDemoMode();
-const DEVICE_NAME = Device.deviceName || (Platform.OS === 'android' ? Platform.constants.Model : 'iPhone');
 
 export function GroupLobbyScreen({ navigation, route }: any) {
   const { groupName, isLeader } = route.params || {};
@@ -30,12 +28,12 @@ export function GroupLobbyScreen({ navigation, route }: any) {
   const resetTracking = useTrackingStore((state) => state.resetTracking);
   const role = useTrackingStore((state) => state.role);
   const myDeviceId = useTrackingStore((state) => state.myDeviceId);
+  const group = useTrackingStore((state) => state.group);
 
   const localMember = {
     id: myDeviceId,
-    name: isLeader ? 'You (Leader)' : 'You',
+    name: isLeader ? 'You • Leader' : 'You',
     status: 'safe' as const,
-    batteryLevel: 100,
     isMe: true,
   };
   const displayMembers = [
@@ -44,7 +42,6 @@ export function GroupLobbyScreen({ navigation, route }: any) {
     id: m.id,
     name: m.name,
     status: m.status,
-    batteryLevel: m.batteryLevel,
     isMe: false,
   })),
   ];
@@ -72,7 +69,17 @@ export function GroupLobbyScreen({ navigation, route }: any) {
     navigation.replace('Tracking');
   };
 
-  const handleLeaveLobby = () => {
+  const handleLeaveLobby = async () => {
+    try {
+      if (isLeader) {
+        tcpSocketManager.broadcast({ type: 'END_GROUP', timestamp: Date.now() });
+      }
+      tcpSocketManager.disconnect();
+      tcpSocketManager.stopServer();
+      await wifiDirectManager.leaveGroup();
+    } catch (error) {
+      console.warn('Could not fully close group lobby:', error);
+    }
     if (resetTracking) {
       resetTracking();
     }
@@ -87,10 +94,10 @@ export function GroupLobbyScreen({ navigation, route }: any) {
           <TouchableOpacity onPress={handleLeaveLobby} style={styles.leaveBtn}>
             <Text style={styles.leaveText}>Cancel</Text>
           </TouchableOpacity>
-          <Text style={styles.headerTitle} numberOfLines={1}>
+          <Text style={styles.headerTitle} numberOfLines={1} ellipsizeMode="tail">
             {groupName || 'Group Lobby'}
           </Text>
-          <View style={{ width: 60 }} />
+          <View style={styles.headerSpacer} />
         </View>
 
         {/* Demo Mode Banner */}
@@ -118,17 +125,17 @@ export function GroupLobbyScreen({ navigation, route }: any) {
         {isLeader && (
           <View style={styles.qrCard}>
             <Text style={styles.qrTitle}>Invite Members via QR Code</Text>
-            <Text style={styles.qrSubtitle}>Ask others to scan this code on their Scan screen to connect instantly</Text>
+            <Text style={styles.qrSubtitle}>Ask others to scan this code, then select this nearby host to connect.</Text>
             <View style={styles.qrContainer}>
               <QRCode
-                value={DEMO ? 'DEMO_PEER' : DEVICE_NAME}
+                value={DEMO ? 'DEMO_PEER' : `traveltrack:group:${group?.id || 'active'}`}
                 size={130}
                 color="#0A4A6D"
                 backgroundColor="#ffffff"
               />
             </View>
             <Text style={styles.qrInstructions}>
-              P2P Host Name contains: <Text style={{ fontWeight: 'bold' }}>{DEVICE_NAME}</Text>
+              QR confirms this invitation. Wi-Fi Direct chooses the nearby host.
             </Text>
           </View>
         )}
@@ -151,9 +158,9 @@ export function GroupLobbyScreen({ navigation, route }: any) {
                 </View>
                 <View style={styles.memberInfo}>
                   <Text style={styles.memberName}>
-                    {item.name} {item.isMe ? ' (You)' : ''}
+                    {item.name}
                   </Text>
-                  <Text style={styles.memberMeta}>🔋 Battery: {item.batteryLevel}%</Text>
+                  <Text style={styles.memberMeta}>{item.isMe ? 'This device' : 'Connected through Wi-Fi Direct'}</Text>
                 </View>
                 <View style={styles.statusBadge}>
                   <View style={styles.statusDot} />
@@ -200,6 +207,7 @@ const styles = StyleSheet.create({
   },
   leaveBtn: {
     paddingVertical: 8,
+    width: 76,
   },
   leaveText: {
     color: '#EF4444',
@@ -212,6 +220,11 @@ const styles = StyleSheet.create({
     color: '#1E293B',
     flex: 1,
     textAlign: 'center',
+    minWidth: 0,
+    paddingHorizontal: 8,
+  },
+  headerSpacer: {
+    width: 76,
   },
   banner: {
     flexDirection: 'row',

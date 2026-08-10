@@ -54,7 +54,6 @@ export function useLocation() {
         accuracy: myLocation.accuracy,
         bearing: myLocation.bearing,
         speed: myLocation.speed,
-        batteryLevel: 90,
         timestamp: myLocation.timestamp || Date.now(),
       };
       tcpSocketManager.send(payload);
@@ -68,11 +67,10 @@ export function useLocation() {
         members: [
           {
             id: myDeviceId,
-            name: userName + ' (Leader)',
+            name: userName,
             latitude: myLocation.latitude,
             longitude: myLocation.longitude,
             accuracy: myLocation.accuracy,
-            batteryLevel: 100,
             status: 'safe' as const,
             lastSeen: myLocation.timestamp || Date.now(),
             isLeader: true,
