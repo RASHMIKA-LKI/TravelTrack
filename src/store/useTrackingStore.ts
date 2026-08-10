@@ -57,6 +57,7 @@ interface TrackingState {
   radiusMeters: number;
   meetupPoint: MeetupPoint | null;
 
+  setMyDeviceId: (deviceId: string) => void;
   setRole: (role: 'leader' | 'member') => void;
   setGroup: (group: Group) => void;
   setMyLocation: (location: LocationData) => void;
@@ -90,6 +91,7 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
   radiusMeters: 50,
   meetupPoint: null,
 
+  setMyDeviceId: (myDeviceId) => set({ myDeviceId }),
   setRole: (role) => set({ role }),
   setGroup: (group) => set({ group }),
 
@@ -101,8 +103,11 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
     if (prev) {
       const latDiff = Math.abs(prev.latitude - location.latitude);
       const lngDiff = Math.abs(prev.longitude - location.longitude);
-      // ~1m = 0.00001 degrees. Skip if moved less than 1m.
-      if (latDiff < 0.00001 && lngDiff < 0.00001) return;
+      // Keep a low-rate heartbeat for stationary members.  The previous
+      // implementation dropped every stationary update, which made a nearby
+      // device look stale to the group even though its GPS was still active.
+      const elapsed = location.timestamp - prev.timestamp;
+      if (latDiff < 0.00001 && lngDiff < 0.00001 && elapsed < 5000) return;
     }
     set({ myLocation: location });
   },
@@ -122,17 +127,43 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
       );
       if (!hasChange) return state; // Nothing changed → skip re-render
 
+      const hasValidCoordinates =
+        Number.isFinite(locationData.latitude) &&
+        Number.isFinite(locationData.longitude) &&
+        !(locationData.latitude === 0 && locationData.longitude === 0);
+      const lastKnown = hasValidCoordinates
+        ? {
+            lastKnownLatitude: locationData.latitude,
+            lastKnownLongitude: locationData.longitude,
+            lastKnownTimestamp: locationData.lastSeen ?? Date.now(),
+          }
+        : {};
+
       return {
         members: state.members.map((m) =>
-          m.id === memberId ? { ...m, ...locationData } : m
+          m.id === memberId ? { ...m, ...locationData, ...lastKnown } : m
         ),
       };
     }),
 
-  addMember: (member) =>
+  addMember: (member) => {
+    const hasValidCoordinates =
+      Number.isFinite(member.latitude) &&
+      Number.isFinite(member.longitude) &&
+      !(member.latitude === 0 && member.longitude === 0);
+    const memberWithLastKnown = hasValidCoordinates
+      ? {
+          ...member,
+          lastKnownLatitude: member.latitude,
+          lastKnownLongitude: member.longitude,
+          lastKnownTimestamp: member.lastSeen,
+        }
+      : member;
+
     set((state) => ({
-      members: [...state.members.filter((m) => m.id !== member.id), member],
-    })),
+      members: [...state.members.filter((m) => m.id !== member.id), memberWithLastKnown],
+    }));
+  },
 
   removeMember: (memberId) =>
     set((state) => ({

@@ -1,6 +1,7 @@
 // src/screens/OnboardingScreen.tsx
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, StatusBar, Dimensions } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { colors } from '../theme/colors';
@@ -54,17 +55,9 @@ export function OnboardingScreen({ navigation }: any) {
   const slide = slides[currentIndex];
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
       
-      {/* Top Header */}
-      <View style={styles.header}>
-        <View />
-        <TouchableOpacity style={styles.skipBtn} onPress={finishOnboarding}>
-          <Text style={styles.skipText}>Skip</Text>
-        </TouchableOpacity>
-      </View>
-
       {/* Slide Content */}
       <View style={styles.contentContainer}>
         <View style={styles.iconWrapper}>
@@ -112,7 +105,7 @@ export function OnboardingScreen({ navigation }: any) {
           </Text>
         </TouchableOpacity>
       </View>
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -122,24 +115,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     justifyContent: 'space-between',
   },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    paddingTop: 20,
-    height: 60,
-  },
-  skipBtn: {
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-  },
-  skipText: {
-    color: '#64748B',
-    fontWeight: '700',
-    fontSize: 15,
-  },
   contentContainer: {
+
     alignItems: 'center',
     paddingHorizontal: 32,
     flex: 1,

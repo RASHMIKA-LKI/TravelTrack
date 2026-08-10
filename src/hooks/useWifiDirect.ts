@@ -4,6 +4,7 @@ import { wifiDirectManager } from '../services/wifiDirectManager';
 import { tcpSocketManager } from '../services/tcpSocketManager';
 import { useTrackingStore } from '../store/useTrackingStore';
 import { alertManager } from '../services/alertManager';
+import { useAuthStore } from '../store/useAuthStore';
 
 export function useWifiDirect() {
   const setConnectionStatus = useTrackingStore((state) => state.setConnectionStatus);
@@ -29,6 +30,7 @@ export function useWifiDirect() {
             name: payload.memberName,
             latitude: payload.latitude,
             longitude: payload.longitude,
+            accuracy: payload.accuracy,
             batteryLevel: payload.batteryLevel,
             status: 'safe',
             lastSeen: payload.timestamp,
@@ -37,6 +39,7 @@ export function useWifiDirect() {
           updateMemberLocation(payload.memberId, {
             latitude: payload.latitude,
             longitude: payload.longitude,
+            accuracy: payload.accuracy,
             batteryLevel: payload.batteryLevel,
             lastSeen: payload.timestamp,
           });
@@ -46,6 +49,8 @@ export function useWifiDirect() {
         const myLoc = useTrackingStore.getState().myLocation;
         const updatedMembers = useTrackingStore.getState().members;
         const myDeviceId = useTrackingStore.getState().myDeviceId;
+        const leader = useAuthStore.getState().user;
+        const leaderName = leader?.displayName || leader?.email?.split('@')[0] || 'Group Leader';
         const groupStatePayload = {
           type: 'GROUP_STATE',
           members: [
@@ -53,12 +58,14 @@ export function useWifiDirect() {
               ? [
                   {
                     id: myDeviceId,
-                    name: 'Leader',
+                    name: leaderName,
                     latitude: myLoc.latitude,
                     longitude: myLoc.longitude,
+                    accuracy: myLoc.accuracy,
                     batteryLevel: 100,
                     status: 'safe' as const,
                     lastSeen: myLoc.timestamp || Date.now(),
+                    isLeader: true,
                   },
                 ]
               : []),
@@ -85,7 +92,7 @@ export function useWifiDirect() {
         // ✅ BUG FIX: Relay chat to all connected members so everyone sees it
         tcpSocketManager.broadcast(payload);
       } else if (payload.type === 'MEETUP_POINT') {
-        // ✅ NEW: Handle meetup point from member
+        // ✅ Handle meetup point from member
         const { setMeetupPoint, addAlert } = useTrackingStore.getState();
         setMeetupPoint({
           name: payload.name,
@@ -124,9 +131,11 @@ export function useWifiDirect() {
               name: m.name,
               latitude: m.latitude,
               longitude: m.longitude,
+              accuracy: m.accuracy,
               batteryLevel: m.batteryLevel ?? 100,
               status: m.status ?? 'safe',
               lastSeen: m.lastSeen ?? Date.now(),
+              isLeader: m.isLeader || m.name === 'Leader',
             });
           }
         });
@@ -134,7 +143,16 @@ export function useWifiDirect() {
         console.log('✅ Leader started tracking — navigating to TrackingScreen');
         setIsTracking(true);
       } else if (payload.type === 'ALERT' && payload.reason === 'OUT_OF_RANGE') {
-        alertManager.triggerOutOfRangeAlert('You', payload.distance);
+        alertManager.triggerOutOfRangeAlert('You', payload.distance || 50);
+      } else if (payload.type === 'ALERT_OUT_OF_RANGE') {
+        if (payload.memberId !== useTrackingStore.getState().myDeviceId) return;
+        alertManager.triggerOutOfRangeAlert('You', payload.distance || 50);
+        const { addAlert } = useTrackingStore.getState();
+        addAlert({
+          type: 'out_of_range',
+          memberName: 'Group Leader',
+          message: `⚠️ Alert: You are ${Math.round(payload.distance || 50)}m away — outside of leader's safe radius!`,
+        });
       } else if (payload.type === 'SOS') {
         triggerSOS(payload.memberName);
         alertManager.triggerSOSAlert(
@@ -152,7 +170,7 @@ export function useWifiDirect() {
           text: payload.message,
         });
       } else if (payload.type === 'MEETUP_POINT') {
-        // ✅ NEW: Handle meetup point broadcast from leader
+        // ✅ Handle meetup point broadcast from leader
         const { setMeetupPoint, addAlert } = useTrackingStore.getState();
         setMeetupPoint({
           name: payload.name,

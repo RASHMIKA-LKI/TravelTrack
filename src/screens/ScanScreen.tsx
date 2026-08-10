@@ -6,12 +6,12 @@ import {
   TouchableOpacity,
   StyleSheet,
   FlatList,
-  SafeAreaView,
   ActivityIndicator,
   Alert,
   StatusBar,
   Animated,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../theme/colors';
 import { useWifiDirect } from '../hooks/useWifiDirect';
 import { useTrackingStore } from '../store/useTrackingStore';

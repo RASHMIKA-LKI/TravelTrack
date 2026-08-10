@@ -14,6 +14,13 @@ export interface Member {
   batteryLevel: number;
   status: 'safe' | 'warning' | 'out_of_range' | 'sos';
   lastSeen: number;
+  isLeader?: boolean;
+  /** GPS accuracy reported by the member's device, in metres. */
+  accuracy?: number;
+  bearingDegrees?: number;
+  lastKnownLatitude?: number;
+  lastKnownLongitude?: number;
+  lastKnownTimestamp?: number;
 }
 
 export interface Group {

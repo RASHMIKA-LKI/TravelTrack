@@ -25,6 +25,7 @@ export function useGeofence() {
   const members        = useTrackingStore((state) => state.members);
   const myLocation     = useTrackingStore((state) => state.myLocation);
   const radiusMeters   = useTrackingStore((state) => state.radiusMeters);
+  const role           = useTrackingStore((state) => state.role);
   const updateMemberLocation = useTrackingStore((state) => state.updateMemberLocation);
   const addAlert       = useTrackingStore((state) => state.addAlert);
 
@@ -33,12 +34,18 @@ export function useGeofence() {
   const lastStatusRef = useRef<Record<string, string>>({});
 
   useEffect(() => {
-    // Nothing to do if we don't have our own location yet
-    if (!myLocation) return;
+    // The leader owns radius decisions. Members receive a targeted alert from
+    // the leader; otherwise every phone could independently flag the leader.
+    if (role !== 'leader' || !myLocation) return;
+
+    const myDeviceId = useTrackingStore.getState().myDeviceId;
 
     members.forEach((member) => {
-      // Skip members who haven't reported a location yet
-      if (!member.latitude || !member.longitude) return;
+      // Skip checking yourself (don't perform geofence alerts on your own device)
+      if (member.id === myDeviceId || member.id === 'me') return;
+
+      // Skip members who haven't reported a valid GPS location yet (0,0 or missing)
+      if (!Number.isFinite(member.latitude) || !Number.isFinite(member.longitude) || (member.latitude === 0 && member.longitude === 0)) return;
 
       const distance = calculateDistance(
         member.latitude,
@@ -47,7 +54,8 @@ export function useGeofence() {
         myLocation.longitude
       );
 
-      const newStatus = getMemberStatus(distance, radiusMeters);
+      const uncertainty = Math.max(0, myLocation.accuracy || 0) + Math.max(0, member.accuracy || 0);
+      const newStatus = getMemberStatus(distance, radiusMeters, uncertainty);
       const prevStatus = lastStatusRef.current[member.id];
 
       // ── KEY FIX ─────────────────────────────────────────────────────────────
@@ -57,7 +65,16 @@ export function useGeofence() {
       // ─────────────────────────────────────────────────────────────────────────
       if (newStatus !== prevStatus) {
         lastStatusRef.current[member.id] = newStatus;
-        updateMemberLocation(member.id, { status: newStatus });
+
+        // If transitioning to out_of_range, save current location as lastKnown location
+        const locationUpdate: any = { status: newStatus };
+        if (newStatus === 'out_of_range') {
+          locationUpdate.lastKnownLatitude = member.latitude;
+          locationUpdate.lastKnownLongitude = member.longitude;
+          locationUpdate.lastKnownTimestamp = Date.now();
+        }
+
+        updateMemberLocation(member.id, locationUpdate);
 
         // Just went OUT OF RANGE
         if (newStatus === 'out_of_range' && prevStatus !== undefined) {
@@ -76,6 +93,22 @@ export function useGeofence() {
               memberName: member.name,
               message: `${member.name} is ${Math.round(distance)}m away — out of safe zone`,
             });
+
+            // Broadcast ALERT_OUT_OF_RANGE over TCP so member device vibrates & alerts member
+            try {
+              const { tcpSocketManager } = require('../services/tcpSocketManager');
+              if (tcpSocketManager && tcpSocketManager.broadcast) {
+                tcpSocketManager.broadcast({
+                  type: 'ALERT_OUT_OF_RANGE',
+                  memberId: member.id,
+                  memberName: member.name,
+                  distance,
+                  timestamp: Date.now(),
+                });
+              }
+            } catch (e) {
+              console.warn('Failed to broadcast out-of-range alert over TCP:', e);
+            }
           }
         }
 
@@ -102,5 +135,5 @@ export function useGeofence() {
   // Zustand actions are stable references but including them caused a secondary
   // re-render path. members and myLocation are the only real triggers.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [members, myLocation, radiusMeters]);
+  }, [members, myLocation, radiusMeters, role]);
 }

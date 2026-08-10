@@ -6,10 +6,10 @@ import {
   TouchableOpacity,
   StyleSheet,
   FlatList,
-  SafeAreaView,
   StatusBar,
   ActivityIndicator,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../theme/colors';
 import { useTrackingStore } from '../store/useTrackingStore';
 import { tcpSocketManager } from '../services/tcpSocketManager';
@@ -29,21 +29,25 @@ export function GroupLobbyScreen({ navigation, route }: any) {
   const setIsTracking = useTrackingStore((state) => state.setIsTracking);
   const resetTracking = useTrackingStore((state) => state.resetTracking);
   const role = useTrackingStore((state) => state.role);
+  const myDeviceId = useTrackingStore((state) => state.myDeviceId);
 
-  // Fallback demo members if store is empty (to see visual styling)
-  const fallbackMembers = [
-    { id: 'me', name: isLeader ? 'You (Leader)' : 'You', status: 'safe', batteryLevel: 94, isMe: true },
-    { id: '2', name: 'Sarah Mendis', status: 'safe', batteryLevel: 88, isMe: false },
-    { id: '3', name: 'Mike Perera', status: 'safe', batteryLevel: 72, isMe: false },
-  ];
-
-  const displayMembers = (storeMembers.length > 0 || role !== null) ? storeMembers.map(m => ({
+  const localMember = {
+    id: myDeviceId,
+    name: isLeader ? 'You (Leader)' : 'You',
+    status: 'safe' as const,
+    batteryLevel: 100,
+    isMe: true,
+  };
+  const displayMembers = [
+    localMember,
+    ...storeMembers.filter((m) => m.id !== myDeviceId).map(m => ({
     id: m.id,
     name: m.name,
     status: m.status,
     batteryLevel: m.batteryLevel,
-    isMe: m.id === 'me'
-  })) : fallbackMembers;
+    isMe: false,
+  })),
+  ];
 
   // Watch for tracking state change (members navigate automatically when leader triggers start)
   useEffect(() => {

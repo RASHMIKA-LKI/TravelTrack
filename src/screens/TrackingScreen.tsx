@@ -5,7 +5,6 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
-  SafeAreaView,
   ScrollView,
   StatusBar,
   Animated,
@@ -17,6 +16,7 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors } from '../theme/colors';
 import { useTrackingStore } from '../store/useTrackingStore';
@@ -28,7 +28,14 @@ import { useLocation } from '../hooks/useLocation';
 import { useGeofence } from '../hooks/useGeofence';
 import { isDemoMode } from '../utils/isDemoMode';
 import { stopDemo } from '../services/demoService';
+import { firestoreService } from '../services/firestoreService';
 import { SOSOverlay } from '../components/SOSOverlay';
+import {
+  calculateDistance,
+  calculateBearing,
+  getCardinalDirection,
+  getRadarRingIndex,
+} from '../utils/geofence';
 
 const DEMO = isDemoMode();
 
@@ -54,8 +61,9 @@ export function TrackingScreen({ navigation }: any) {
   const setMeetupPoint = useTrackingStore((state) => state.setMeetupPoint);
 
   const { user } = useAuthStore();
-  const userName = user?.displayName || user?.email?.split('@')[0] || 'Alex Johnson';
-  const userEmail = user?.email || 'alex.johnson@email.com';
+  const guestDefault = `Guest (${Platform.OS === 'android' ? (Platform.constants as any)?.Model || 'Traveler' : 'Traveler'})`;
+  const userName = user?.displayName || user?.email?.split('@')[0] || guestDefault;
+  const userEmail = user?.email || 'guest@traveltrack.app';
 
   const settings = useSettingsStore();
   const soundEnabled = settings?.soundEnabled ?? true;
@@ -121,29 +129,59 @@ export function TrackingScreen({ navigation }: any) {
   // Calculate badge counts
   const unreadAlertsCount = alerts.filter(a => !a.read).length;
 
-  // Real members from the store — no demo fallback, show only real connected people
-  const displayMembers = members.map((m, idx) => ({
-    id: m.id,
-    name: m.name,
-    distance: m.latitude && myLocation
-      ? Math.round(calculateDistance(m.latitude, m.longitude, myLocation.latitude, myLocation.longitude))
-      : null,
-    status: m.status,
-    emoji: ['👩', '👨', '🧑', '👧', '👵'][idx % 5],
-    angle: (idx * 110 + 30) % 360,
-    batteryLevel: m.batteryLevel || 90,
-  }));
+  // Real members from the store — the current device is always centered, so
+  // exclude its echoed GROUP_STATE entry to avoid showing it twice.
+  const displayMembers = members.filter((m) => m.id !== myDeviceId).map((m, idx) => {
+    const isLeaderDevice = Boolean(m.isLeader || (group?.leaderId && m.id === group.leaderId));
 
+    // Use the latest valid position, retaining the last one after a member
+    // leaves Wi-Fi Direct range so the leader keeps an actionable direction.
+    const targetLat = Number.isFinite(m.latitude) && Number.isFinite(m.longitude)
+      ? m.latitude
+      : m.lastKnownLatitude;
+    const targetLng = Number.isFinite(m.latitude) && Number.isFinite(m.longitude)
+      ? m.longitude
+      : m.lastKnownLongitude;
 
-  function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
-    const R = 6371e3;
-    const φ1 = (lat1 * Math.PI) / 180;
-    const φ2 = (lat2 * Math.PI) / 180;
-    const Δφ = ((lat2 - lat1) * Math.PI) / 180;
-    const Δλ = ((lon2 - lon1) * Math.PI) / 180;
-    const a = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
-    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  }
+    const hasLocation = Boolean(
+      myLocation &&
+      Number.isFinite(targetLat) &&
+      Number.isFinite(targetLng) &&
+      !(targetLat === 0 && targetLng === 0)
+    );
+    const gpsDistance = hasLocation
+      ? calculateDistance(myLocation!.latitude, myLocation!.longitude, targetLat!, targetLng!)
+      : 0;
+    const accuracyMargin = Math.round(Math.max(0, myLocation?.accuracy || 0) + Math.max(0, m.accuracy || 0));
+
+    const bearing = hasLocation
+      ? calculateBearing(myLocation!.latitude, myLocation!.longitude, targetLat!, targetLng!)
+      : 0;
+    const cardinal = getCardinalDirection(bearing);
+
+    const ringIndex = getRadarRingIndex(gpsDistance, radiusMeters);
+
+    // Icon assignment:
+    // Leader: 👑 (only if this member is the group leader!)
+    // Joined members: 👨, 👩, 🧑, 👧, 👵 (never crown!)
+    const avatarEmoji = isLeaderDevice ? '👑' : ['👨', '👩', '🧑', '👧', '👵'][idx % 5];
+
+    return {
+      id: m.id,
+      name: m.name,
+      distance: Math.round(gpsDistance),
+      accuracyMargin,
+      hasLocation,
+      status: m.status,
+      emoji: avatarEmoji,
+      isLeader: isLeaderDevice,
+      bearing,
+      cardinal,
+      ringIndex,
+      lastKnownTime: m.lastKnownTimestamp || m.lastSeen,
+      batteryLevel: m.batteryLevel || 90,
+    };
+  });
 
   const handleEndTracking = () => {
     Alert.alert(
@@ -156,7 +194,23 @@ export function TrackingScreen({ navigation }: any) {
         {
           text: 'Leave',
           style: 'destructive',
-          onPress: () => {
+          onPress: async () => {
+            if (role === 'leader' && user && group) {
+              try {
+                await firestoreService.saveTripAndIncrementCount(user.uid, {
+                  groupName: group.name,
+                  startTime: group.createdAt,
+                  endTime: Date.now(),
+                  memberCount: members.filter((member) => member.id !== myDeviceId).length + 1,
+                });
+              } catch (error) {
+                console.warn('Could not save completed trip:', error);
+                Alert.alert(
+                  'Trip History Not Saved',
+                  'Tracking has ended, but this trip could not be saved to the account. Check your connection before ending future trips.'
+                );
+              }
+            }
             if (resetTracking) resetTracking();
             navigation.replace('Home');
           },
@@ -293,7 +347,6 @@ export function TrackingScreen({ navigation }: any) {
       alertManager.triggerSOSAlert('You', myLocation?.latitude || 0, myLocation?.longitude || 0);
     }
 
-    // ✅ BUG FIX: Actually send SOS over TCP to other devices
     try {
       const sosPayload = {
         type: 'SOS',
@@ -323,13 +376,15 @@ export function TrackingScreen({ navigation }: any) {
             {/* Horizontal Active Friends Carousel */}
             <View style={styles.activeFriendsCard}>
               <View style={styles.friendsHeader}>
-                <Text style={styles.friendsTitle}>Active Friends</Text>
-                <Text style={styles.friendsCount}>{displayMembers.length + 1} online</Text>
+                <Text style={styles.friendsTitle}>Active Group Members</Text>
+              <Text style={styles.friendsCount}>{displayMembers.length + 1} online</Text>
               </View>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.friendsListScroll}>
+                {/* Own Device Avatar (Green Dot 🟢) */}
                 <View style={styles.friendAvatarWrapper}>
-                  <View style={[styles.avatarCircle, { borderColor: colors.safe }]}>
-                    <Text style={styles.avatarEmoji}>👑</Text>
+                  <View style={[styles.avatarCircle, { borderColor: colors.safe, backgroundColor: '#E6F4EA' }]}>
+                    <Text style={styles.avatarEmoji}>🟢</Text>
+                    {role === 'leader' && <Text style={styles.ownLeaderBadge}>👑</Text>}
                   </View>
                   <Text style={styles.friendName}>You</Text>
                 </View>
@@ -339,6 +394,11 @@ export function TrackingScreen({ navigation }: any) {
                       <Text style={styles.avatarEmoji}>{m.emoji}</Text>
                     </View>
                     <Text style={styles.friendName} numberOfLines={1}>{m.name.split(' ')[0]}</Text>
+                    {m.hasLocation && (
+                      <Text style={{ fontSize: 9, color: '#64748B', textAlign: 'center' }}>
+                        ~{m.distance}m {m.cardinal}
+                      </Text>
+                    )}
                   </View>
                 ))}
               </ScrollView>
@@ -346,28 +406,51 @@ export function TrackingScreen({ navigation }: any) {
 
             {/* Circular Radar Visualizer (acting as geofence map) */}
             <View style={styles.radarCard}>
+              <View style={styles.radarHeaderInfo}>
+                <Text style={styles.radarTitle}>📍 Group Safety Radar</Text>
+                <Text style={styles.radarSubtitle}>GPS estimate • Safe radius: {radiusMeters}m • Your device is centered</Text>
+              </View>
+
               <View style={styles.radarContainer}>
                 <View style={styles.radarOuterCircle}>
+                  {/* Compass Directions */}
+                  <Text style={[styles.cardinalText, styles.cardinalN]}>N</Text>
+                  <Text style={[styles.cardinalText, styles.cardinalE]}>E</Text>
+                  <Text style={[styles.cardinalText, styles.cardinalS]}>S</Text>
+                  <Text style={[styles.cardinalText, styles.cardinalW]}>W</Text>
+
+                  {/* Concentric Distance Rings */}
                   <View style={styles.radarMiddleCircle} />
                   <View style={styles.radarInnerCircle} />
                   
                   {/* Animated Sweep Line */}
                   <Animated.View style={[styles.radarSweep, { transform: [{ rotate: spin }] }]} />
 
-                  {/* Leader Dot (Center) */}
-                  <View style={styles.leaderCenterDot}>
-                    <Text style={styles.leaderDotEmoji}>👑</Text>
+                  {/* Own Device Center Dot (Always 🟢 Green Circle) */}
+                  <View style={styles.ownCenterDot}>
+                    <Text style={styles.ownDotEmoji}>🟢</Text>
+                    {role === 'leader' && <Text style={styles.ownLeaderBadge}>👑</Text>}
                   </View>
 
-                  {/* Member Dots mapped dynamically on radar */}
-                  {displayMembers.map((m) => {
-                    const maxVisualRadius = 90;
-                    const percentage = Math.min((m.distance ?? 0) / (radiusMeters * 1.2), 1);
-                    const visualDist = percentage * maxVisualRadius;
+                  {/* GPS distance gives an approximate ring; bearing gives direction. */}
+                  {displayMembers.filter((m) => m.hasLocation).map((m) => {
+                    let visualDist = 0;
+                    if (m.status === 'out_of_range' || m.distance > radiusMeters) {
+                      visualDist = 104; // Placed at outer edge boundary
+                    } else if (m.ringIndex === 1) {
+                      visualDist = 14 + (m.distance / (radiusMeters * 0.33)) * 22; // Inner Ring
+                    } else if (m.ringIndex === 2) {
+                      visualDist = 38 + ((m.distance - radiusMeters * 0.33) / (radiusMeters * 0.33)) * 30; // Mid Ring
+                    } else {
+                      visualDist = 70 + ((m.distance - radiusMeters * 0.66) / (radiusMeters * 0.34)) * 28; // Outer Ring
+                    }
                     
-                    const radAngle = (m.angle * Math.PI) / 180;
-                    const xOffset = visualDist * Math.cos(radAngle);
-                    const yOffset = visualDist * Math.sin(radAngle);
+                    // Convert bearing angle to screen offsets (0° North = UP = -Y)
+                    const radAngle = (m.bearing * Math.PI) / 180;
+                    const xOffset = visualDist * Math.sin(radAngle);
+                    const yOffset = -visualDist * Math.cos(radAngle);
+
+                    const isOutOfRange = m.status === 'out_of_range';
 
                     return (
                       <View
@@ -377,13 +460,39 @@ export function TrackingScreen({ navigation }: any) {
                           {
                             transform: [{ translateX: xOffset }, { translateY: yOffset }],
                             backgroundColor: getStatusColor(m.status),
+                            borderColor: isOutOfRange ? '#EF4444' : '#FFFFFF',
+                            borderWidth: isOutOfRange ? 2.5 : 2,
                           },
                         ]}
                       >
                         <Text style={styles.memberRadarDotEmoji}>{m.emoji}</Text>
+                        {isOutOfRange && (
+                          <View style={styles.lostBadgeContainer}>
+                            <Text style={styles.lostBadgeText}>Outside • {m.cardinal}</Text>
+                          </View>
+                        )}
                       </View>
                     );
                   })}
+                </View>
+              </View>
+
+              {/* Radar Ring Legend */}
+              <Text style={styles.radarAccuracyNote}>
+                Distance is approximate (combined GPS accuracy ±{Math.round(myLocation?.accuracy || 0)}m plus each member's reported accuracy).
+              </Text>
+              <View style={styles.radarLegendRow}>
+                <View style={styles.legendItem}>
+                  <View style={[styles.legendDot, { backgroundColor: 'rgba(10, 74, 109, 0.4)' }]} />
+                  <Text style={styles.legendText}>Ring 1: Inner</Text>
+                </View>
+                <View style={styles.legendItem}>
+                  <View style={[styles.legendDot, { backgroundColor: 'rgba(10, 74, 109, 0.25)' }]} />
+                  <Text style={styles.legendText}>Ring 2: Mid</Text>
+                </View>
+                <View style={styles.legendItem}>
+                  <View style={[styles.legendDot, { backgroundColor: '#EF4444' }]} />
+                  <Text style={styles.legendText}>Ring 3: Outer ({radiusMeters}m)</Text>
                 </View>
               </View>
             </View>
@@ -410,18 +519,12 @@ export function TrackingScreen({ navigation }: any) {
         );
 
       case 'messages':
-        const displayMessages = messages.length > 0
-          ? messages.map(msg => ({
-              id: msg.id,
-              senderName: msg.senderName,
-              text: msg.text,
-              mine: msg.senderId === myDeviceId,
-            }))
-          : [
-              { id: '1', senderName: 'Sarah Mendis', text: 'Everyone ready to head out?', mine: false },
-              { id: '2', senderName: 'You', text: 'Yes! On my way to the meeting point.', mine: true },
-              { id: '3', senderName: 'Mike Perera', text: "I'm at the entrance already", mine: false },
-            ];
+        const displayMessages = messages.map(msg => ({
+          id: msg.id,
+          senderName: msg.senderName,
+          text: msg.text,
+          mine: msg.senderId === myDeviceId,
+        }));
 
         return (
           <KeyboardAvoidingView
@@ -433,7 +536,14 @@ export function TrackingScreen({ navigation }: any) {
               ref={chatListRef}
               data={displayMessages}
               keyExtractor={(item) => item.id}
-              contentContainerStyle={{ padding: 20, paddingBottom: 30 }}
+              style={{ flex: 1 }}
+              contentContainerStyle={{ paddingVertical: 12 }}
+              onContentSizeChange={() => chatListRef.current?.scrollToEnd({ animated: true })}
+              ListEmptyComponent={
+                <View style={{ flex: 1, paddingVertical: 40, alignItems: 'center', justifyContent: 'center' }}>
+                  <Text style={{ fontSize: 14, color: '#94A3B8' }}>💬 No messages in group chat yet.</Text>
+                </View>
+              }
               renderItem={({ item }) => (
                 <View style={[styles.msgRow, item.mine ? styles.msgRowMine : styles.msgRowOther]}>
                   {!item.mine && <Text style={styles.msgSenderName}>{item.senderName}</Text>}
@@ -508,12 +618,7 @@ export function TrackingScreen({ navigation }: any) {
           </ScrollView>
         );
 
-      case 'alerts':
-        const displayAlerts = alerts.length > 0 ? alerts : [
-          { id: '1', type: 'out_of_range', memberName: 'Jack Silva', message: 'Jack is 75m away from the group. Last seen 2 minutes ago.', timestamp: Date.now() - 1000 * 60 * 2 },
-          { id: '2', type: 'meetup', memberName: 'Sarah Mendis', message: 'Sarah set a meetup point at Central Park Entrance', timestamp: Date.now() - 1000 * 60 * 15 },
-          { id: '3', type: 'returned', memberName: 'Mike Perera', message: 'Mike has returned to the group safe range.', timestamp: Date.now() - 1000 * 60 * 30 },
-        ];
+        const displayAlerts = alerts;
 
         const getAlertIcon = (type: string) => {
           switch (type) {
@@ -551,23 +656,29 @@ export function TrackingScreen({ navigation }: any) {
               </Text>
             </View>
 
-            {displayAlerts.map((alert) => {
-              const minutesAgo = Math.max(1, Math.round((Date.now() - alert.timestamp) / (1000 * 60)));
-              const timeString = minutesAgo < 60 ? `${minutesAgo} min ago` : `${Math.round(minutesAgo/60)} hours ago`;
+            {displayAlerts.length === 0 ? (
+              <View style={{ paddingVertical: 40, alignItems: 'center', justifyContent: 'center' }}>
+                <Text style={{ fontSize: 14, color: '#94A3B8' }}>🔔 No activity alerts logged yet.</Text>
+              </View>
+            ) : (
+              displayAlerts.map((alert) => {
+                const minutesAgo = Math.max(1, Math.round((Date.now() - alert.timestamp) / (1000 * 60)));
+                const timeString = minutesAgo < 60 ? `${minutesAgo} min ago` : `${Math.round(minutesAgo/60)} hours ago`;
 
-              return (
-                <View key={alert.id} style={styles.alertCard}>
-                  <View style={[styles.alertIconCircle, { backgroundColor: getAlertIconColor(alert.type) + '15' }]}>
-                    <Text style={{ fontSize: 18 }}>{getAlertIcon(alert.type)}</Text>
+                return (
+                  <View key={alert.id} style={styles.alertCard}>
+                    <View style={[styles.alertIconCircle, { backgroundColor: getAlertIconColor(alert.type) + '15' }]}>
+                      <Text style={{ fontSize: 18 }}>{getAlertIcon(alert.type)}</Text>
+                    </View>
+                    <View style={styles.alertCardDetails}>
+                      <Text style={styles.alertCardTitle}>{alert.type === 'out_of_range' ? 'Member Outside Radius' : alert.type === 'meetup' ? 'New Meetup Point' : 'Alert'}</Text>
+                      <Text style={styles.alertCardText}>{alert.message}</Text>
+                      <Text style={styles.alertTime}>{timeString}</Text>
+                    </View>
                   </View>
-                  <View style={styles.alertCardDetails}>
-                    <Text style={styles.alertCardTitle}>{alert.type === 'out_of_range' ? 'Member Outside Radius' : alert.type === 'meetup' ? 'New Meetup Point' : 'Alert'}</Text>
-                    <Text style={styles.alertCardText}>{alert.message}</Text>
-                    <Text style={styles.alertTime}>{timeString}</Text>
-                  </View>
-                </View>
-              );
-            })}
+                );
+              })
+            )}
           </ScrollView>
         );
 
@@ -592,19 +703,19 @@ export function TrackingScreen({ navigation }: any) {
             </View>
 
             {/* Stats Block */}
-            <View style={styles.statsCardGrid}>
-              <View style={styles.statGridItem}>
-                <Text style={styles.statGridVal}>12</Text>
-                <Text style={styles.statGridLabel}>Trips</Text>
-              </View>
-              <View style={styles.statGridItem}>
-                <Text style={styles.statGridVal}>5</Text>
-                <Text style={styles.statGridLabel}>Groups</Text>
-              </View>
-              <View style={styles.statGridItem}>
-                <Text style={styles.statGridVal}>48h</Text>
-                <Text style={styles.statGridLabel}>Tracked</Text>
-              </View>
+              <View style={styles.statsCardGrid}>
+                <View style={styles.statGridItem}>
+                  <Text style={styles.statGridVal}>{members.filter((member) => member.id !== myDeviceId).length + 1}</Text>
+                  <Text style={styles.statGridLabel}>Members</Text>
+                </View>
+                <View style={styles.statGridItem}>
+                  <Text style={styles.statGridVal}>{radiusMeters}m</Text>
+                  <Text style={styles.statGridLabel}>Safe Radius</Text>
+                </View>
+                <View style={styles.statGridItem}>
+                  <Text style={styles.statGridVal}>{role === 'leader' ? 'Host' : 'Member'}</Text>
+                  <Text style={styles.statGridLabel}>Group Role</Text>
+                </View>
             </View>
 
             {/* Settings Toggles List */}
@@ -906,6 +1017,28 @@ const styles = StyleSheet.create({
     elevation: 2,
     paddingVertical: 20,
   },
+  radarHeaderInfo: {
+    paddingHorizontal: 16,
+    marginBottom: 12,
+    alignItems: 'center',
+  },
+  radarTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#0A4A6D',
+  },
+  radarSubtitle: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 2,
+  },
+  radarAccuracyNote: {
+    color: '#64748B',
+    fontSize: 11,
+    lineHeight: 16,
+    marginTop: 10,
+    textAlign: 'center',
+  },
   radarContainer: {
     alignItems: 'center',
     justifyContent: 'center',
@@ -949,25 +1082,41 @@ const styles = StyleSheet.create({
     bottom: '50%',
     backgroundColor: 'transparent',
   },
-  leaderCenterDot: {
+  ownCenterDot: {
     position: 'absolute',
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: '#ffffff',
+    backgroundColor: '#E6F4EA',
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#000',
+    shadowColor: '#10B981',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 3,
-    borderWidth: 1.5,
-    borderColor: '#0A4A6D',
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 4,
+    borderWidth: 2,
+    borderColor: '#10B981',
   },
-  leaderDotEmoji: {
-    fontSize: 15,
+  ownDotEmoji: {
+    fontSize: 14,
   },
+  ownLeaderBadge: {
+    position: 'absolute',
+    top: -8,
+    right: -6,
+    fontSize: 12,
+  },
+  cardinalText: {
+    position: 'absolute',
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#64748B',
+  },
+  cardinalN: { top: 4 },
+  cardinalE: { right: 8 },
+  cardinalS: { bottom: 4 },
+  cardinalW: { left: 8 },
   memberRadarDot: {
     position: 'absolute',
     width: 28,
@@ -975,8 +1124,6 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 2,
-    borderColor: '#ffffff',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.15,
@@ -985,6 +1132,43 @@ const styles = StyleSheet.create({
   },
   memberRadarDotEmoji: {
     fontSize: 13,
+  },
+  lostBadgeContainer: {
+    position: 'absolute',
+    top: -18,
+    minWidth: 64,
+    backgroundColor: '#EF4444',
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 6,
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  lostBadgeText: {
+    color: '#ffffff',
+    fontSize: 8,
+    fontWeight: 'bold',
+  },
+  radarLegendRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginTop: 16,
+    paddingHorizontal: 12,
+  },
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  legendDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  legendText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#64748B',
   },
   quickActionsContainer: {
     flexDirection: 'row',

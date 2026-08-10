@@ -6,11 +6,11 @@ import {
   TextInput,
   TouchableOpacity,
   StyleSheet,
-  SafeAreaView,
   Alert,
   ActivityIndicator,
   StatusBar,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../theme/colors';
 import { useTrackingStore } from '../store/useTrackingStore';
 import { useWifiDirect } from '../hooks/useWifiDirect';
@@ -28,6 +28,7 @@ export function CreateGroupScreen({ navigation }: any) {
   const setGroup = useTrackingStore((state) => state.setGroup);
   const setStoreRadius = useTrackingStore((state) => state.setRadius);
   const setIsTracking = useTrackingStore((state) => state.setIsTracking);
+  const myDeviceId = useTrackingStore((state) => state.myDeviceId);
   const { startHosting } = useWifiDirect();
 
   const handleStart = async () => {
@@ -46,7 +47,7 @@ export function CreateGroupScreen({ navigation }: any) {
       setGroup({
         id: 'demo-group',
         name: groupName || '🗺️ Demo Trip',
-        leaderId: 'leader-me',
+        leaderId: myDeviceId,
         radiusMeters: radius,
         createdAt: Date.now(),
       });
@@ -66,7 +67,7 @@ export function CreateGroupScreen({ navigation }: any) {
       setGroup({
         id: Date.now().toString(),
         name: groupName,
-        leaderId: 'leader-me',
+        leaderId: myDeviceId,
         radiusMeters: radius,
         createdAt: Date.now(),
       });
@@ -94,7 +95,7 @@ export function CreateGroupScreen({ navigation }: any) {
               setGroup({
                 id: Date.now().toString(),
                 name: groupName,
-                leaderId: 'leader-me',
+                leaderId: myDeviceId,
                 radiusMeters: radius,
                 createdAt: Date.now(),
               });

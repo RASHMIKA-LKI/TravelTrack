@@ -16,7 +16,9 @@ export function useLocation() {
   const role = useTrackingStore((state) => state.role);
   const connectionStatus = useTrackingStore((state) => state.connectionStatus);
   const { user } = useAuthStore();
-  const userName = user?.displayName || user?.email?.split('@')[0] || 'Alex Johnson';
+  const myDeviceId = useTrackingStore((state) => state.myDeviceId);
+  const guestDefault = `Guest ${myDeviceId.slice(-4).toUpperCase()}`;
+  const userName = user?.displayName || user?.email?.split('@')[0] || guestDefault;
 
   useEffect(() => {
     // When this hook is first mounted, start listening for location updates
@@ -38,8 +40,6 @@ export function useLocation() {
     // This prevents noisy errors and potential crashes when location updates
     // fire before the TCP connection is established.
     if (connectionStatus !== 'connected') return;
-
-    const myDeviceId = useTrackingStore.getState().myDeviceId;
 
     if (role === 'member') {
       // Guard: only send if the TCP client is actually connected
@@ -71,16 +71,18 @@ export function useLocation() {
             name: userName + ' (Leader)',
             latitude: myLocation.latitude,
             longitude: myLocation.longitude,
+            accuracy: myLocation.accuracy,
             batteryLevel: 100,
             status: 'safe' as const,
             lastSeen: myLocation.timestamp || Date.now(),
+            isLeader: true,
           },
           ...members,
         ],
       };
       tcpSocketManager.broadcast(payload);
     }
-  }, [myLocation, role, userName, connectionStatus]);
+  }, [myLocation, role, userName, connectionStatus, myDeviceId]);
 
   /** Call this to start GPS tracking */
   const startTracking = useCallback(async () => {

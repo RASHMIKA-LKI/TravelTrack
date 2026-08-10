@@ -141,19 +141,37 @@ export function startDemo(): void {
 
   // Move member positions every 2 seconds
   locationTimer = setInterval(() => {
-    const { addMember, updateMemberLocation, radiusMeters, myLocation } = useTrackingStore.getState();
+    const { updateMemberLocation, radiusMeters, myLocation } = useTrackingStore.getState();
+    const { calculateBearing } = require('../utils/geofence');
+
     DEMO_MEMBERS.forEach((m) => {
       const { lat, lng } = stepPosition(m.id);
-      const dist = myLocation
+      const gpsDist = myLocation
         ? haversine(myLocation.latitude, myLocation.longitude, lat, lng)
         : 0;
-      const status = dist > radiusMeters ? 'out_of_range' : 'safe';
-      updateMemberLocation(m.id, {
+
+      const bearingDegrees = myLocation
+        ? calculateBearing(myLocation.latitude, myLocation.longitude, lat, lng)
+        : 0;
+
+      const status = gpsDist > radiusMeters ? 'out_of_range' : 'safe';
+
+      const updateData: any = {
         latitude: lat,
         longitude: lng,
         lastSeen: Date.now(),
         status,
-      });
+        accuracy: 8,
+        bearingDegrees,
+      };
+
+      if (status === 'out_of_range') {
+        updateData.lastKnownLatitude = lat;
+        updateData.lastKnownLongitude = lng;
+        updateData.lastKnownTimestamp = Date.now();
+      }
+
+      updateMemberLocation(m.id, updateData);
     });
   }, 2000);
 
