@@ -6,6 +6,7 @@ import {
   androidRotationVectorHeading,
   normalizeHeading,
   smoothHeading,
+  type HeadingSource,
 } from '../utils/heading';
 
 export interface CompassData {
@@ -15,6 +16,8 @@ export interface CompassData {
   hasHeading: boolean;
   isCalibrated: boolean;
   statusText: string;
+  /** Distinguishes phone orientation sensors from movement-only GPS course. */
+  source: HeadingSource;
 }
 
 export function useCompass(updateIntervalMs: number = 100): CompassData {
@@ -23,24 +26,33 @@ export function useCompass(updateIntervalMs: number = 100): CompassData {
   const [hasHeading, setHasHeading] = useState(false);
   const [isCalibrated, setIsCalibrated] = useState(false);
   const [statusText, setStatusText] = useState('Compass starting');
+  const [source, setSource] = useState<HeadingSource>('none');
   const myLocation = useTrackingStore((state) => state.myLocation);
   const lastHeadingRef = useRef(0);
   const sensorFiredRef = useRef(false);
+  const sourceRef = useRef<HeadingSource>('none');
 
   useEffect(() => {
     let subscription: { remove: () => void } | null = null;
     let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
     let mounted = true;
 
-    const publish = (rawHeading: number, calibrated: boolean, label: string) => {
+    const publish = (
+      rawHeading: number,
+      calibrated: boolean,
+      label: string,
+      nextSource: Exclude<HeadingSource, 'gps-course' | 'none'>
+    ) => {
       if (!mounted || !Number.isFinite(rawHeading)) return;
       sensorFiredRef.current = true;
+      sourceRef.current = nextSource;
       const smoothed = smoothHeading(lastHeadingRef.current, rawHeading);
       lastHeadingRef.current = smoothed;
       setHeading(Math.round(smoothed));
       setHasHeading(true);
       setIsCalibrated(calibrated);
       setStatusText(label);
+      setSource(nextSource);
     };
 
     const startMagnetometerFallback = async () => {
@@ -60,7 +72,8 @@ export function useCompass(updateIntervalMs: number = 100): CompassData {
         publish(
           magneticHeading,
           calibrated,
-          calibrated ? 'Compass active' : 'Compass moving; magnetic accuracy is low'
+          calibrated ? 'Compass active' : 'Compass moving; magnetic accuracy is low',
+          'magnetometer'
         );
       });
     };
@@ -80,7 +93,7 @@ export function useCompass(updateIntervalMs: number = 100): CompassData {
             const fusedHeading = Platform.OS === 'android'
               ? androidRotationVectorHeading(alpha, measurement.orientation ?? 0)
               : normalizeHeading((-alpha * 180) / Math.PI);
-            publish(fusedHeading, true, 'Compass active');
+            publish(fusedHeading, true, 'Compass active', 'rotation-vector');
           });
           // Some Android models report the fused sensor as available but never
           // deliver events. Fall back instead of leaving those members at 0°.
@@ -120,22 +133,35 @@ export function useCompass(updateIntervalMs: number = 100): CompassData {
     };
   }, [updateIntervalMs]);
 
-  // GPS course is a final fallback when a device lacks a working orientation sensor.
+  // GPS course remains useful movement information when orientation hardware is absent.
+  // The radar deliberately does not treat this value as the phone-facing direction.
   useEffect(() => {
-    if (
-      !sensorFiredRef.current &&
+    if (sensorFiredRef.current) return;
+
+    const hasMovingCourse = Boolean(
       myLocation &&
       myLocation.speed >= 0.8 &&
       Number.isFinite(myLocation.bearing) &&
       myLocation.bearing >= 0
-    ) {
+    );
+
+    if (hasMovingCourse && myLocation) {
       const smoothed = smoothHeading(lastHeadingRef.current, myLocation.bearing);
       lastHeadingRef.current = smoothed;
       setHeading(Math.round(smoothed));
       setHasHeading(true);
+      setIsCalibrated(false);
       setStatusText('Using GPS travel direction');
+      sourceRef.current = 'gps-course';
+      setSource('gps-course');
+    } else if (sourceRef.current === 'gps-course') {
+      // Do not keep presenting an old travel course once the user stops.
+      sourceRef.current = 'none';
+      setHasHeading(false);
+      setStatusText('Compass sensor unavailable');
+      setSource('none');
     }
   }, [myLocation]);
 
-  return { heading, isAvailable, hasHeading, isCalibrated, statusText };
+  return { heading, isAvailable, hasHeading, isCalibrated, statusText, source };
 }

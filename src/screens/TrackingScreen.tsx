@@ -39,6 +39,7 @@ import {
   getCardinalDirection,
   getRadarRingIndex,
 } from '../utils/geofence';
+import { getRadarHeading, isPhoneFacingHeadingSource } from '../utils/heading';
 
 const DEMO = isDemoMode();
 
@@ -80,7 +81,7 @@ export function TrackingScreen({ navigation }: any) {
   // Start GPS tracking, geofence monitoring, and reconnection coordinator
   const { startTracking, stopTracking } = useLocation();
   useGeofence(); // Actively monitors distances and triggers out-of-range alerts
-  const compass = useCompass(); // Fused rotation-vector compass with magnetometer/GPS fallback
+  const compass = useCompass(); // Phone orientation when supported; GPS course is informational only
 
   // Radar Animation
   const radarAnim = useRef(new Animated.Value(0)).current;
@@ -282,7 +283,8 @@ export function TrackingScreen({ navigation }: any) {
     );
   };
 
-  const effectiveCompassHeading = compass.hasHeading ? compass.heading : 0;
+  const hasPhoneFacingCompass = isPhoneFacingHeadingSource(compass.source);
+  const effectiveCompassHeading = getRadarHeading(compass.source, compass.heading);
 
   useEffect(() => navigation.addListener('beforeRemove', (event: any) => {
     if (allowExitRef.current || !isTracking) return;
@@ -467,15 +469,17 @@ export function TrackingScreen({ navigation }: any) {
               <View style={styles.radarHeaderInfo}>
                 <Text style={styles.radarTitle}>📍 Group Safety Radar</Text>
                 <Text style={styles.radarSubtitle}>
-                  {compass.hasHeading
+                  {hasPhoneFacingCompass
                     ? `🧭 ${compass.statusText}: ${compass.heading}° (${getCardinalDirection(compass.heading)}) • Safe radius: ${radiusMeters}m`
-                    : `${compass.statusText} • Safe radius: ${radiusMeters}m • North-Up`}
+                    : compass.source === 'gps-course'
+                      ? `🧭 Compass unavailable • North-Up • GPS course: ${compass.heading}° (${getCardinalDirection(compass.heading)}) • Safe radius: ${radiusMeters}m`
+                      : `🧭 ${compass.statusText} • North-Up • Safe radius: ${radiusMeters}m`}
                 </Text>
               </View>
 
               <View style={styles.radarContainer}>
                 <View style={styles.radarOuterCircle}>
-                  {/* Rotated Compass Directions based on device magnetometer heading */}
+                  {/* Rotate only from a true phone-orientation sensor; otherwise remain north-up. */}
                   {(() => {
                     const devHeading = effectiveCompassHeading;
                     // Angles for N (0°), E (90°), S (180°), W (270°) relative to device heading
@@ -509,14 +513,16 @@ export function TrackingScreen({ navigation }: any) {
                   {/* Animated Sweep Line */}
                   <Animated.View style={[styles.radarSweep, { transform: [{ rotate: spin }] }]} />
 
-                  {/* Own Device Center Dot with Upward Orientation Arrow (You are facing UP ⬆️) */}
+                  {/* The arrow is truthful only when a phone-facing heading exists. */}
                   <View style={styles.ownCenterDot}>
-                    <Text style={{ fontSize: 10, color: '#3B82F6', fontWeight: 'bold' }}>▲</Text>
+                    {hasPhoneFacingCompass && (
+                      <Text style={{ fontSize: 10, color: '#3B82F6', fontWeight: 'bold' }}>▲</Text>
+                    )}
                     <Text style={styles.ownDotEmoji}>🟢</Text>
                     {role === 'leader' && <Text style={styles.ownLeaderBadge}>👑</Text>}
                   </View>
 
-                  {/* GPS distance gives an approximate ring; bearing relative to device heading gives screen direction */}
+                  {/* GPS distance sets the ring. Direction is phone-relative only with a real compass. */}
                   {displayMembers.filter((m) => m.hasLocation).map((m) => {
                     let visualDist = 0;
                     if (m.status === 'out_of_range' || m.distance > radiusMeters) {
@@ -568,13 +574,17 @@ export function TrackingScreen({ navigation }: any) {
               </View>
 
               {/* Magnetometer Confidence & Radar Ring Legend */}
-              {!compass.isCalibrated && compass.isAvailable && (
+              {compass.source === 'magnetometer' && !compass.isCalibrated && (
                 <Text style={[styles.radarAccuracyNote, { color: '#D97706', fontWeight: '600' }]}>
                   ⚠️ {compass.statusText}
                 </Text>
               )}
               <Text style={styles.radarAccuracyNote}>
-                Up arrow (▲) indicates the direction your phone is physically facing. Rotating your phone rotates the radar map.
+                {hasPhoneFacingCompass
+                  ? 'Up arrow (▲) indicates the direction your phone is physically facing. Rotating your phone rotates the radar map.'
+                  : compass.source === 'gps-course'
+                    ? 'Compass hardware is unavailable. Radar stays North-Up; GPS course shows movement direction only, not phone-facing direction.'
+                    : 'Compass hardware is unavailable. Radar stays North-Up, with member positions shown by their GPS direction from north.'}
               </Text>
               <View style={styles.radarLegendRow}>
                 <View style={styles.legendItem}>

@@ -51,6 +51,10 @@ assert.equal(geofence.getMemberStatus(60, 50, 5), 'out_of_range');
 assert.equal(heading.androidRotationVectorHeading(-Math.PI / 2), 90);
 const smoothedNorth = heading.smoothHeading(359, 1);
 assert.ok(smoothedNorth > 355 || smoothedNorth < 5, 'heading smoothing crosses north by the short path');
+assert.equal(heading.getRadarHeading('rotation-vector', 72), 72, 'fused compass rotates the radar');
+assert.equal(heading.getRadarHeading('magnetometer', 361), 1, 'magnetometer heading is normalized');
+assert.equal(heading.getRadarHeading('gps-course', 25), 0, 'GPS travel course cannot impersonate phone orientation');
+assert.equal(heading.getRadarHeading('none', 180), 0, 'sensorless radar remains north-up');
 
 const stableFix = stabilization.stabilizeLocationFix(
   { latitude: 7, longitude: 80, accuracy: 5, speed: 0, bearing: 0, timestamp: 1 },
