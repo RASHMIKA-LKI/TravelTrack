@@ -14,6 +14,8 @@ require.extensions['.ts'] = function compileTypeScript(module, filename) {
 const freshness = require('../src/utils/trackingFreshness.ts');
 const protocol = require('../src/utils/sessionProtocol.ts');
 const geofence = require('../src/utils/geofence.ts');
+const heading = require('../src/utils/heading.ts');
+const stabilization = require('../src/utils/locationStabilization.ts');
 
 const now = 1_000_000;
 assert.equal(freshness.getLocalFixAgeMs(now - 12_000, now), 12_000);
@@ -45,5 +47,17 @@ assert.equal(protocol.isValidLocationPayload({
 assert.equal(geofence.getMemberStatus(40, 50, 5), 'safe');
 assert.equal(geofence.getMemberStatus(52, 50, 5), 'warning');
 assert.equal(geofence.getMemberStatus(60, 50, 5), 'out_of_range');
+
+assert.equal(heading.androidRotationVectorHeading(-Math.PI / 2), 90);
+const smoothedNorth = heading.smoothHeading(359, 1);
+assert.ok(smoothedNorth > 355 || smoothedNorth < 5, 'heading smoothing crosses north by the short path');
+
+const stableFix = stabilization.stabilizeLocationFix(
+  { latitude: 7, longitude: 80, accuracy: 5, speed: 0, bearing: 0, timestamp: 1 },
+  { latitude: 7.000001, longitude: 80.000001, accuracy: 6, speed: 0, bearing: 45, timestamp: 2 }
+);
+assert.equal(stableFix.latitude, 7, 'sub-metre GPS wander does not move the radar centre');
+assert.equal(stableFix.timestamp, 2, 'stabilized stationary fixes remain fresh');
+assert.equal(stableFix.bearing, 45, 'compass/course metadata still updates');
 
 console.log('Tracking safety logic: all assertions passed.');

@@ -1,106 +1,141 @@
-// src/hooks/useCompass.ts
-import { useState, useEffect, useRef } from 'react';
-import { Magnetometer } from 'expo-sensors';
+import { useEffect, useRef, useState } from 'react';
+import { DeviceMotion, Magnetometer } from 'expo-sensors';
 import { Platform } from 'react-native';
 import { useTrackingStore } from '../store/useTrackingStore';
+import {
+  androidRotationVectorHeading,
+  normalizeHeading,
+  smoothHeading,
+} from '../utils/heading';
 
 export interface CompassData {
-  /** Heading angle in degrees (0 - 360, where 0 = North, 90 = East) */
   heading: number;
-  /** Whether magnetometer sensor hardware is available on this device */
   isAvailable: boolean;
-  /** True if magnetic field strength is within normal calibrated range */
+  /** A heading has actually been received; do not confuse hardware presence with live data. */
+  hasHeading: boolean;
   isCalibrated: boolean;
-  /** User-friendly status message */
   statusText: string;
 }
 
 export function useCompass(updateIntervalMs: number = 100): CompassData {
-  const [heading, setHeading] = useState<number>(0);
-  const [isAvailable, setIsAvailable] = useState<boolean>(true);
-  const [isCalibrated, setIsCalibrated] = useState<boolean>(false);
-  const [statusText, setStatusText] = useState<string>('Compass calibrating');
-
+  const [heading, setHeading] = useState(0);
+  const [isAvailable, setIsAvailable] = useState(true);
+  const [hasHeading, setHasHeading] = useState(false);
+  const [isCalibrated, setIsCalibrated] = useState(false);
+  const [statusText, setStatusText] = useState('Compass starting');
   const myLocation = useTrackingStore((state) => state.myLocation);
-  const lastHeadingRef = useRef<number>(0);
-  const sensorFiredRef = useRef<boolean>(false);
+  const lastHeadingRef = useRef(0);
+  const sensorFiredRef = useRef(false);
 
   useEffect(() => {
-    let subscription: any = null;
-    let isMounted = true;
+    let subscription: { remove: () => void } | null = null;
+    let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+    let mounted = true;
 
-    async function setupMagnetometer() {
+    const publish = (rawHeading: number, calibrated: boolean, label: string) => {
+      if (!mounted || !Number.isFinite(rawHeading)) return;
+      sensorFiredRef.current = true;
+      const smoothed = smoothHeading(lastHeadingRef.current, rawHeading);
+      lastHeadingRef.current = smoothed;
+      setHeading(Math.round(smoothed));
+      setHasHeading(true);
+      setIsCalibrated(calibrated);
+      setStatusText(label);
+    };
+
+    const startMagnetometerFallback = async () => {
+      const available = await Magnetometer.isAvailableAsync();
+      if (!mounted) return;
+      setIsAvailable(available);
+      if (!available) {
+        setStatusText('Compass sensor unavailable');
+        return;
+      }
+      Magnetometer.setUpdateInterval(updateIntervalMs);
+      subscription = Magnetometer.addListener(({ x, y, z }) => {
+        const magnitude = Math.sqrt(x * x + y * y + z * z);
+        const calibrated = magnitude >= 15 && magnitude <= 120;
+        const magneticHeading = normalizeHeading((Math.atan2(x, y) * 180) / Math.PI);
+        // Low confidence is shown to the user, but it must not freeze the radar.
+        publish(
+          magneticHeading,
+          calibrated,
+          calibrated ? 'Compass active' : 'Compass moving; magnetic accuracy is low'
+        );
+      });
+    };
+
+    const startSensor = async () => {
       try {
-        const available = await Magnetometer.isAvailableAsync();
-        if (!isMounted) return;
-        setIsAvailable(available);
-
-        if (!available) {
-          setStatusText('Compass Unavailable (Using GPS Bearing)');
-          if (myLocation?.bearing) {
-            setHeading(Math.round(myLocation.bearing));
-          }
-          return;
+        const motionAvailable = await DeviceMotion.isAvailableAsync();
+        if (!mounted) return;
+        if (motionAvailable) {
+          let motionEventReceived = false;
+          setIsAvailable(true);
+          DeviceMotion.setUpdateInterval(updateIntervalMs);
+          subscription = DeviceMotion.addListener((measurement) => {
+            const alpha = measurement.rotation?.alpha;
+            if (!Number.isFinite(alpha)) return;
+            motionEventReceived = true;
+            const fusedHeading = Platform.OS === 'android'
+              ? androidRotationVectorHeading(alpha, measurement.orientation ?? 0)
+              : normalizeHeading((-alpha * 180) / Math.PI);
+            publish(fusedHeading, true, 'Compass active');
+          });
+          // Some Android models report the fused sensor as available but never
+          // deliver events. Fall back instead of leaving those members at 0°.
+          fallbackTimer = setTimeout(() => {
+            if (!mounted || motionEventReceived) return;
+            subscription?.remove();
+            subscription = null;
+            void startMagnetometerFallback().catch((error) => {
+              console.warn('Magnetometer fallback failed:', error);
+              if (mounted) {
+                setIsAvailable(false);
+                setStatusText('Compass sensor unavailable');
+              }
+            });
+          }, 2_000);
+        } else {
+          await startMagnetometerFallback();
         }
-
-        Magnetometer.setUpdateInterval(updateIntervalMs);
-
-        subscription = Magnetometer.addListener((data) => {
-          if (!isMounted) return;
-          sensorFiredRef.current = true;
-          let { x, y, z } = data;
-
-          // Compute magnetic field strength magnitude
-          const magnitude = Math.sqrt(x * x + y * y + z * z);
-          // Normal Earth magnetic field is typically between 15 uT and 100 uT
-          const calibrated = magnitude >= 15 && magnitude <= 120;
-          setIsCalibrated(calibrated);
-
-          if (!calibrated) {
-            setStatusText('Low Magnetometer Confidence (Move in Figure-8)');
-          } else {
-            setStatusText('Compass Active');
+      } catch (error) {
+        console.warn('Rotation-vector compass unavailable; using magnetometer:', error);
+        try { await startMagnetometerFallback(); }
+        catch (fallbackError) {
+          console.warn('Compass initialization error:', fallbackError);
+          if (mounted) {
+            setIsAvailable(false);
+            setStatusText('Compass sensor unavailable');
           }
-
-          // Calculate magnetic compass angle relative to top of device screen
-          let angleRad = Math.atan2(x, y);
-          let rawAngle = angleRad * (180 / Math.PI);
-          let normalized = (rawAngle + 360) % 360;
-
-          // Low-pass filter with 360 degree wrap-around correction
-          const prev = lastHeadingRef.current;
-          let delta = (normalized - prev + 540) % 360 - 180;
-          const alpha = 0.18; // Smooth factor
-          const smoothed = (prev + delta * alpha + 360) % 360;
-
-          lastHeadingRef.current = smoothed;
-          setHeading(Math.round(smoothed));
-        });
-      } catch (err) {
-        console.warn('Magnetometer initialization error:', err);
-        if (isMounted) {
-          setIsAvailable(false);
-          setStatusText('Compass Unavailable');
         }
       }
-    }
+    };
 
-    setupMagnetometer();
-
+    void startSensor();
     return () => {
-      isMounted = false;
-      if (subscription) {
-        subscription.remove();
-      }
+      mounted = false;
+      if (fallbackTimer) clearTimeout(fallbackTimer);
+      subscription?.remove();
     };
   }, [updateIntervalMs]);
 
-  // Fallback to GPS bearing when magnetometer is unavailable or static
+  // GPS course is a final fallback when a device lacks a working orientation sensor.
   useEffect(() => {
-    if (!sensorFiredRef.current && myLocation?.bearing && myLocation.bearing > 0) {
-      setHeading(Math.round(myLocation.bearing));
+    if (
+      !sensorFiredRef.current &&
+      myLocation &&
+      myLocation.speed >= 0.8 &&
+      Number.isFinite(myLocation.bearing) &&
+      myLocation.bearing >= 0
+    ) {
+      const smoothed = smoothHeading(lastHeadingRef.current, myLocation.bearing);
+      lastHeadingRef.current = smoothed;
+      setHeading(Math.round(smoothed));
+      setHasHeading(true);
+      setStatusText('Using GPS travel direction');
     }
   }, [myLocation]);
 
-  return { heading, isAvailable, isCalibrated, statusText };
+  return { heading, isAvailable, hasHeading, isCalibrated, statusText };
 }

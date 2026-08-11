@@ -80,7 +80,7 @@ export function TrackingScreen({ navigation }: any) {
   // Start GPS tracking, geofence monitoring, and reconnection coordinator
   const { startTracking, stopTracking } = useLocation();
   useGeofence(); // Actively monitors distances and triggers out-of-range alerts
-  const compass = useCompass(); // Real-time magnetometer orientation hook
+  const compass = useCompass(); // Fused rotation-vector compass with magnetometer/GPS fallback
 
   // Radar Animation
   const radarAnim = useRef(new Animated.Value(0)).current;
@@ -183,7 +183,9 @@ export function TrackingScreen({ navigation }: any) {
     const isOffline = ageSeconds > 120 || m.connectionState === 'disconnected';
 
     // A peer remains visible on the radar up to 2 minutes after last packet arrival.
-    const hasLocation = rawHasLocation;
+    // Keep stale coordinates in member metadata, but do not plot an offline
+    // coordinate as though it were a current radar position.
+    const hasLocation = rawHasLocation && !isOffline;
     const hasReliableBearing = hasLocation && gpsDistance > accuracyMargin && isLive;
 
     const bearing = rawHasLocation
@@ -279,6 +281,8 @@ export function TrackingScreen({ navigation }: any) {
       ]
     );
   };
+
+  const effectiveCompassHeading = compass.hasHeading ? compass.heading : 0;
 
   useEffect(() => navigation.addListener('beforeRemove', (event: any) => {
     if (allowExitRef.current || !isTracking) return;
@@ -463,8 +467,8 @@ export function TrackingScreen({ navigation }: any) {
               <View style={styles.radarHeaderInfo}>
                 <Text style={styles.radarTitle}>📍 Group Safety Radar</Text>
                 <Text style={styles.radarSubtitle}>
-                  {compass.isAvailable && compass.isCalibrated
-                    ? `🧭 Dynamic Heading: ${compass.heading}° (${getCardinalDirection(compass.heading)}) • Safe radius: ${radiusMeters}m`
+                  {compass.hasHeading
+                    ? `🧭 ${compass.statusText}: ${compass.heading}° (${getCardinalDirection(compass.heading)}) • Safe radius: ${radiusMeters}m`
                     : `${compass.statusText} • Safe radius: ${radiusMeters}m • North-Up`}
                 </Text>
               </View>
@@ -473,7 +477,7 @@ export function TrackingScreen({ navigation }: any) {
                 <View style={styles.radarOuterCircle}>
                   {/* Rotated Compass Directions based on device magnetometer heading */}
                   {(() => {
-                    const devHeading = compass.isAvailable && compass.isCalibrated ? compass.heading : 0;
+                    const devHeading = effectiveCompassHeading;
                     // Angles for N (0°), E (90°), S (180°), W (270°) relative to device heading
                     const getCardPos = (targetAngle: number, radius: number = 105) => {
                       const relAngle = targetAngle - devHeading;
@@ -526,7 +530,7 @@ export function TrackingScreen({ navigation }: any) {
                     }
                     
                     // Convert target bearing relative to device heading to screen offsets (0° = Top of screen = -Y)
-                    const relBearing = m.bearing - compass.heading;
+                    const relBearing = m.bearing - effectiveCompassHeading;
                     const radAngle = (relBearing * Math.PI) / 180;
                     const xOffset = visualDist * Math.sin(radAngle);
                     const yOffset = -visualDist * Math.cos(radAngle);

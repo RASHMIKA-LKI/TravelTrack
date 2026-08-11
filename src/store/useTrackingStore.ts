@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { Platform } from 'react-native';
 import { Group, GroupInvitation, InterruptedSession, LocationData, Member, PeerConnectionState } from '../types/models';
+import { stabilizeLocationFix } from '../utils/locationStabilization';
 
 // Used only until AppNavigator finishes the single canonical identity migration.
 const FALLBACK_DEVICE_ID = `${Platform.OS}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -117,9 +118,11 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
   setRole: (role) => set({ role }),
   setGroup: (group) => set({ group, interruptedSession: null }),
 
-  // Preserve every real provider fix. Transport heartbeats must never manufacture
-  // a fresh GPS timestamp from a cached coordinate.
-  setMyLocation: (location) => set({ myLocation: location }),
+  // Preserve the provider timestamp while suppressing the sub-metre coordinate
+  // wander that previously made a stationary radar centre and distance jump.
+  setMyLocation: (location) => set((state) => ({
+    myLocation: stabilizeLocationFix(state.myLocation, location),
+  })),
 
   // ── Only mutate the member that actually changed ───────────────────────────
   updateMemberLocation: (memberId, locationData) =>
