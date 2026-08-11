@@ -1,12 +1,24 @@
-// src/store/useTrackingStore.ts
 import { create } from 'zustand';
 import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Member, Group } from '../types/models';
 
-// Generate a unique device ID per session so messages from this device
-// can be distinguished from messages received from other devices.
-// Using device model + random suffix ensures uniqueness across two phones.
-const DEVICE_ID = `${Platform.OS}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const DEVICE_ID_KEY = '@traveltrack_device_id';
+
+// Generate a fallback device ID per session while loading persistent ID from storage
+const FALLBACK_DEVICE_ID = `${Platform.OS}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+export async function getPersistentDeviceId(): Promise<string> {
+  try {
+    const stored = await AsyncStorage.getItem(DEVICE_ID_KEY);
+    if (stored) return stored;
+    const newId = `${Platform.OS}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    await AsyncStorage.setItem(DEVICE_ID_KEY, newId);
+    return newId;
+  } catch (e) {
+    return FALLBACK_DEVICE_ID;
+  }
+}
 
 interface LocationData {
   latitude: number;
@@ -77,7 +89,7 @@ interface TrackingState {
 }
 
 export const useTrackingStore = create<TrackingState>((set, get) => ({
-  myDeviceId: DEVICE_ID,
+  myDeviceId: FALLBACK_DEVICE_ID,
   role: null,
   group: null,
   members: [],
@@ -113,55 +125,62 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
   },
 
   // ── Only mutate the member that actually changed ───────────────────────────
-  // Always returning a new array from .map() even when nothing changed is
-  // what caused the "maximum update depth exceeded" infinite loop in useGeofence.
-  // Now we check if any field is actually different before touching state.
   updateMemberLocation: (memberId, locationData) =>
     set((state) => {
       const existing = state.members.find((m) => m.id === memberId);
       if (!existing) return state; // Member not found → no change
 
+      const now = Date.now();
+      const patch = {
+        ...locationData,
+        lastReceivedAt: locationData.lastReceivedAt ?? now,
+      };
+
       // Check if any field would actually change
-      const hasChange = (Object.keys(locationData) as (keyof Member)[]).some(
-        (key) => existing[key] !== (locationData as any)[key]
+      const hasChange = (Object.keys(patch) as (keyof Member)[]).some(
+        (key) => existing[key] !== (patch as any)[key]
       );
       if (!hasChange) return state; // Nothing changed → skip re-render
 
       const hasValidCoordinates =
-        Number.isFinite(locationData.latitude) &&
-        Number.isFinite(locationData.longitude) &&
-        !(locationData.latitude === 0 && locationData.longitude === 0);
+        Number.isFinite(patch.latitude) &&
+        Number.isFinite(patch.longitude) &&
+        !(patch.latitude === 0 && patch.longitude === 0);
       const lastKnown = hasValidCoordinates
         ? {
-            lastKnownLatitude: locationData.latitude,
-            lastKnownLongitude: locationData.longitude,
-            lastKnownTimestamp: locationData.lastSeen ?? Date.now(),
+            lastKnownLatitude: patch.latitude,
+            lastKnownLongitude: patch.longitude,
+            lastKnownTimestamp: patch.lastSeen ?? now,
           }
         : {};
 
       return {
         members: state.members.map((m) =>
-          m.id === memberId ? { ...m, ...locationData, ...lastKnown } : m
+          m.id === memberId ? { ...m, ...patch, ...lastKnown } : m
         ),
       };
     }),
 
   addMember: (member) => {
+    const now = Date.now();
     const hasValidCoordinates =
       Number.isFinite(member.latitude) &&
       Number.isFinite(member.longitude) &&
       !(member.latitude === 0 && member.longitude === 0);
-    const memberWithLastKnown = hasValidCoordinates
-      ? {
-          ...member,
-          lastKnownLatitude: member.latitude,
-          lastKnownLongitude: member.longitude,
-          lastKnownTimestamp: member.lastSeen,
-        }
-      : member;
+    const memberWithMetadata = {
+      ...(hasValidCoordinates
+        ? {
+            ...member,
+            lastKnownLatitude: member.latitude,
+            lastKnownLongitude: member.longitude,
+            lastKnownTimestamp: member.lastSeen ?? now,
+          }
+        : member),
+      lastReceivedAt: member.lastReceivedAt ?? now,
+    };
 
     set((state) => ({
-      members: [...state.members.filter((m) => m.id !== member.id), memberWithLastKnown],
+      members: [...state.members.filter((m) => m.id !== member.id), memberWithMetadata],
     }));
   },
 
@@ -228,3 +247,9 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
       meetupPoint: null,
     }),
 }));
+
+// Load persistent device ID asynchronously on startup
+getPersistentDeviceId().then((id) => {
+  useTrackingStore.getState().setMyDeviceId(id);
+});
+

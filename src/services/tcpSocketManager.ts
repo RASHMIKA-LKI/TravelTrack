@@ -25,7 +25,13 @@ function makeMessageHandler(onMessage: (payload: any) => void) {
       buffer = buffer.slice(boundary + 1);
       if (raw.length > 0) {
         try {
-          onMessage(JSON.parse(raw));
+          const parsed = JSON.parse(raw);
+          // Filter out PING/PONG heartbeats from app-level event listeners
+          if (parsed.type === 'PING' || parsed.type === 'PONG') {
+            // Silent socket keep-alive
+          } else {
+            onMessage(parsed);
+          }
         } catch (e) {
           console.warn('⚠️ Failed to parse TCP message:', e, 'Raw:', raw.slice(0, 100));
         }
@@ -69,6 +75,7 @@ class TcpSocketManagerReal {
   private connectedSockets: any[] = [];
   private _serverRunning = false;
   private _clientConnected = false;
+  private heartbeatInterval: any = null;
 
   public onMessageReceived: ((payload: any) => void) | null = null;
   public onMemberConnected: ((socketId: number) => void) | null = null;
@@ -76,6 +83,24 @@ class TcpSocketManagerReal {
 
   get isServerRunning(): boolean { return this._serverRunning; }
   get isClientConnected(): boolean { return this._clientConnected; }
+
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    this.heartbeatInterval = setInterval(() => {
+      if (this._serverRunning) {
+        this.broadcast({ type: 'PING', timestamp: Date.now() });
+      } else if (this._clientConnected) {
+        this.send({ type: 'PING', timestamp: Date.now() });
+      }
+    }, 10000);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
+  }
 
   startServer(): void {
     if (this._serverRunning) {
@@ -111,12 +136,14 @@ class TcpSocketManagerReal {
 
       this.server.listen({ port: PORT, host: '0.0.0.0' }, () => {
         this._serverRunning = true;
+        this.startHeartbeat();
         console.log(`✅ TCP Server listening on port ${PORT}`);
       });
 
       this.server.on('error', (err: any) => {
         console.error('TCP Server error:', err?.message);
         this._serverRunning = false;
+        this.stopHeartbeat();
         if (this.server) { try { this.server.close(); } catch (_) {} this.server = null; }
 
         // ✅ Retry once if port was still in use from a previous session
@@ -146,6 +173,7 @@ class TcpSocketManagerReal {
   }
 
   stopServer(): void {
+    this.stopHeartbeat();
     this.connectedSockets.forEach(socket => { try { socket.destroy(); } catch (_) {} });
     this.connectedSockets = [];
     if (this.server) { try { this.server.close(); } catch (_) {} this.server = null; }
@@ -174,6 +202,7 @@ class TcpSocketManagerReal {
         settled = true;
         clearTimeout(timer);
         this._clientConnected = true;
+        this.startHeartbeat();
         console.log('✅ Connected to leader TCP server!');
         resolve();
       });
@@ -181,10 +210,14 @@ class TcpSocketManagerReal {
         if (this.onMessageReceived) this.onMessageReceived(payload);
       });
       this.client.on('data', handleData);
-      this.client.on('close', () => { this._clientConnected = false; });
+      this.client.on('close', () => {
+        this._clientConnected = false;
+        this.stopHeartbeat();
+      });
       this.client.on('error', (err: any) => {
         console.error('Client TCP error:', err?.message);
         this._clientConnected = false;
+        this.stopHeartbeat();
         if (!settled) {
           settled = true;
           clearTimeout(timer);
@@ -205,6 +238,7 @@ class TcpSocketManagerReal {
   }
 
   disconnect(): void {
+    this.stopHeartbeat();
     if (this.client) { try { this.client.destroy(); } catch (_) {} this.client = null; }
     this._clientConnected = false;
   }

@@ -58,6 +58,7 @@ export function useWifiDirect() {
           .getState()
           .members.some((m) => m.id === payload.memberId);
 
+        const now = Date.now();
         if (!exists) {
           addMember({
             id: payload.memberId,
@@ -68,6 +69,7 @@ export function useWifiDirect() {
             batteryLevel: payload.batteryLevel,
             status: 'safe',
             lastSeen: payload.timestamp,
+            lastReceivedAt: now,
           });
         } else {
           updateMemberLocation(payload.memberId, {
@@ -76,6 +78,7 @@ export function useWifiDirect() {
             accuracy: payload.accuracy,
             batteryLevel: payload.batteryLevel,
             lastSeen: payload.timestamp,
+            lastReceivedAt: now,
           });
         }
 
@@ -126,24 +129,21 @@ export function useWifiDirect() {
   const setupMemberMessageHandler = useCallback(() => {
     tcpSocketManager.onMessageReceived = (payload) => {
       if (payload.type === 'GROUP_STATE') {
+        const myDeviceId = useTrackingStore.getState().myDeviceId;
+        const now = Date.now();
         payload.members?.forEach((m: any) => {
+          if (m.id === myDeviceId) return; // Skip updating self from broadcast
           const exists = useTrackingStore
             .getState()
             .members.some((existing) => existing.id === m.id);
+          const patch = {
+            ...m,
+            lastReceivedAt: now,
+          };
           if (exists) {
-            updateMemberLocation(m.id, m);
+            updateMemberLocation(m.id, patch);
           } else {
-            addMember({
-              id: m.id,
-              name: m.name,
-              latitude: m.latitude,
-              longitude: m.longitude,
-              accuracy: m.accuracy,
-              batteryLevel: m.batteryLevel,
-              status: m.status ?? 'safe',
-              lastSeen: m.lastSeen ?? Date.now(),
-              isLeader: m.isLeader || m.name === 'Leader',
-            });
+            addMember(patch);
           }
         });
       } else if (payload.type === 'START_TRACKING') {

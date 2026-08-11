@@ -161,21 +161,27 @@ export function TrackingScreen({ navigation }: any) {
       ? calculateDistance(myLocation!.latitude, myLocation!.longitude, targetLat!, targetLng!)
       : 0;
     const accuracyMargin = Math.round(Math.max(0, myLocation?.accuracy || 0) + Math.max(0, m.accuracy || 0));
-    const localTimestamp = myLocation?.timestamp || 0;
-    const memberTimestamp = m.lastSeen || m.lastKnownTimestamp || 0;
-    const synchronizedSamples = Boolean(
-      localTimestamp && memberTimestamp && Math.abs(localTimestamp - memberTimestamp) <= 12_000
-    );
-    // A valid, fresh peer position must remain visible to the group. Accuracy
-    // affects how confidently we label its bearing, not whether the traveller
-    // disappears from the safety radar altogether.
-    const hasLocation = rawHasLocation && synchronizedSamples;
-    const hasReliableBearing = hasLocation && gpsDistance > accuracyMargin;
+    const now = Date.now();
+    const lastReceived = m.lastReceivedAt || m.lastKnownTimestamp || m.lastSeen || now;
+    const ageSeconds = Math.round(Math.max(0, now - lastReceived) / 1000);
+    const isLive = ageSeconds <= 30;
+    const isStale = ageSeconds > 30 && ageSeconds <= 120;
+    const isOffline = ageSeconds > 120;
+
+    // A peer remains visible on the radar up to 2 minutes after last packet arrival.
+    const hasLocation = rawHasLocation && !isOffline;
+    const hasReliableBearing = hasLocation && gpsDistance > accuracyMargin && isLive;
 
     const bearing = rawHasLocation
       ? calculateBearing(myLocation!.latitude, myLocation!.longitude, targetLat!, targetLng!)
       : 0;
-    const cardinal = hasReliableBearing ? getCardinalDirection(bearing) : 'GPS uncertain';
+
+    let cardinal = 'GPS uncertain';
+    if (isStale) {
+      cardinal = `Stale (${ageSeconds}s ago)`;
+    } else if (hasReliableBearing) {
+      cardinal = getCardinalDirection(bearing);
+    }
 
     const ringIndex = getRadarRingIndex(gpsDistance, radiusMeters);
 
@@ -190,6 +196,10 @@ export function TrackingScreen({ navigation }: any) {
       distance: Math.round(gpsDistance),
       accuracyMargin,
       hasLocation,
+      isLive,
+      isStale,
+      isOffline,
+      ageSeconds,
       status: m.status,
       emoji: avatarEmoji,
       isLeader: isLeaderDevice,
@@ -197,7 +207,6 @@ export function TrackingScreen({ navigation }: any) {
       cardinal,
       ringIndex,
       lastKnownTime: m.lastKnownTimestamp || m.lastSeen,
-      synchronizedSamples,
       hasReliableBearing,
     };
   });
@@ -494,16 +503,20 @@ export function TrackingScreen({ navigation }: any) {
                             backgroundColor: getStatusColor(m.status),
                             borderColor: isOutOfRange ? '#EF4444' : '#FFFFFF',
                             borderWidth: isOutOfRange ? 2.5 : 2,
-                            opacity: m.hasReliableBearing ? 1 : 0.72,
+                            opacity: m.isStale ? 0.45 : (m.hasReliableBearing ? 1 : 0.75),
                           },
                         ]}
                       >
                         <Text style={styles.memberRadarDotEmoji}>{m.emoji}</Text>
-                        {isOutOfRange && (
+                        {isOutOfRange ? (
                           <View style={styles.lostBadgeContainer}>
                             <Text style={styles.lostBadgeText}>Outside • {m.cardinal}</Text>
                           </View>
-                        )}
+                        ) : m.isStale ? (
+                          <View style={[styles.lostBadgeContainer, { backgroundColor: 'rgba(234, 179, 8, 0.9)' }]}>
+                            <Text style={styles.lostBadgeText}>Stale {m.ageSeconds}s</Text>
+                          </View>
+                        ) : null}
                       </View>
                     );
                   })}

@@ -22,6 +22,8 @@ export interface Member {
   lastKnownLatitude?: number;
   lastKnownLongitude?: number;
   lastKnownTimestamp?: number;
+  /** Local timestamp (Date.now()) when the latest location packet was received on this device. */
+  lastReceivedAt?: number;
 }
 
 export interface Group {

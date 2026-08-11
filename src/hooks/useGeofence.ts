@@ -47,6 +47,11 @@ export function useGeofence() {
       // Skip members who haven't reported a valid GPS location yet (0,0 or missing)
       if (!Number.isFinite(member.latitude) || !Number.isFinite(member.longitude) || (member.latitude === 0 && member.longitude === 0)) return;
 
+      // Do not perform geofence boundary alert decisions on stale coordinates (>30s old)
+      const now = Date.now();
+      const lastReceived = member.lastReceivedAt || member.lastKnownTimestamp || member.lastSeen || 0;
+      if (lastReceived > 0 && now - lastReceived > 30_000) return;
+
       const distance = calculateDistance(
         member.latitude,
         member.longitude,
