@@ -5,14 +5,34 @@ import { NavigationContainer } from '@react-navigation/native';
 import { AuthNavigator } from './AuthNavigator';
 import { MainNavigator } from './MainNavigator';
 import { useAuthStore } from '../store/useAuthStore';
+import { useTrackingStore } from '../store/useTrackingStore';
+import { getOrCreatePeerId } from '../services/identityService';
+import { initializeSessionPersistence } from '../services/sessionPersistenceService';
 
 export function AppNavigator() {
   const { isLoggedIn, isLoading, loadingAction, initialize } = useAuthStore();
+  const setIdentity = useTrackingStore((state) => state.setIdentity);
+  const identityReady = useTrackingStore((state) => state.identityReady);
+  const persistenceReady = useTrackingStore((state) => state.persistenceReady);
 
   useEffect(() => {
     if (initialize) {
       initialize();
     }
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+
+    void getOrCreatePeerId()
+      .then((deviceId) => { if (active) setIdentity(deviceId); })
+      .catch((error) => console.warn('Could not restore local peer identity:', error));
+
+    return () => { active = false; };
+  }, [setIdentity]);
+
+  useEffect(() => {
+    void initializeSessionPersistence();
   }, []);
 
   // ─── Spinner logic ────────────────────────────────────────────────────────
@@ -23,7 +43,7 @@ export function AppNavigator() {
   // The ONLY safe time to block the entire UI with a spinner is during
   // 'initialize', which is the one-time cold-start session restore. After that,
   // each screen handles its own loading indicator on its own button.
-  const showInitSpinner = isLoading && loadingAction === 'initialize';
+  const showInitSpinner = (isLoading && loadingAction === 'initialize') || !identityReady || !persistenceReady;
 
   return (
     <NavigationContainer>

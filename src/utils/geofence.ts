@@ -30,17 +30,23 @@ export function calculateDistance(
 
 /**
  * Determine a member's status based on their distance from the leader.
- * - safe       : within the safe radius
- * - warning    : within 120% of the radius (near the edge)
- * - out_of_range: beyond 120% of the radius
+ * GPS accuracy is treated as a radius of uncertainty:
+ * - safe: the furthest plausible position is within the safe radius
+ * - warning: the reported position could cross the boundary
+ * - out_of_range: even the nearest plausible position is outside the boundary
  */
 export function getMemberStatus(
   distanceMeters: number,
-  radiusMeters: number
+  radiusMeters: number,
+  uncertaintyMeters: number = 0
 ): 'safe' | 'warning' | 'out_of_range' {
-  if (distanceMeters <= radiusMeters) return 'safe';
-  if (distanceMeters <= radiusMeters * 1.2) return 'warning';
-  return 'out_of_range';
+  // GPS reports an accuracy radius, not an exact point.  Only report a member
+  // as outside when even the nearest plausible position is outside the group's
+  // configured boundary.  A possible boundary crossing is a warning instead.
+  const uncertainty = Math.max(0, uncertaintyMeters);
+  if (Math.max(0, distanceMeters - uncertainty) > radiusMeters) return 'out_of_range';
+  if (distanceMeters + uncertainty > radiusMeters) return 'warning';
+  return 'safe';
 }
 
 /**
@@ -90,3 +96,31 @@ export function calculateBearing(
   return (bearing + 360) % 360; // Normalize to 0-360
 }
 
+/**
+ * Convert bearing in degrees (0-360) to a cardinal direction string (N, NE, E, SE, S, SW, W, NW)
+ */
+export function getCardinalDirection(bearingDegrees: number): string {
+  const normalized = (bearingDegrees % 360 + 360) % 360;
+  if (normalized >= 337.5 || normalized < 22.5) return 'N';
+  if (normalized >= 22.5 && normalized < 67.5) return 'NE';
+  if (normalized >= 67.5 && normalized < 112.5) return 'E';
+  if (normalized >= 112.5 && normalized < 157.5) return 'SE';
+  if (normalized >= 157.5 && normalized < 202.5) return 'S';
+  if (normalized >= 202.5 && normalized < 247.5) return 'SW';
+  if (normalized >= 247.5 && normalized < 292.5) return 'W';
+  return 'NW';
+}
+
+/**
+ * Maps a distance onto 1 of the 3 radar concentric rings (or 4 for out of bounds):
+ * 1: Inner ring (0 - 33% of safe radius)
+ * 2: Middle ring (33% - 66% of safe radius)
+ * 3: Outer ring (66% - 100% of safe radius)
+ * 4: Out of bounds (> 100% of safe radius)
+ */
+export function getRadarRingIndex(distanceMeters: number, radiusMeters: number): 1 | 2 | 3 | 4 {
+  if (distanceMeters <= radiusMeters * 0.33) return 1;
+  if (distanceMeters <= radiusMeters * 0.66) return 2;
+  if (distanceMeters <= radiusMeters) return 3;
+  return 4;
+}

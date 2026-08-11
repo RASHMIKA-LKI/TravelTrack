@@ -5,7 +5,6 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
-  SafeAreaView,
   ScrollView,
   StatusBar,
   Animated,
@@ -17,18 +16,30 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors } from '../theme/colors';
 import { useTrackingStore } from '../store/useTrackingStore';
 import { useAuthStore } from '../store/useAuthStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { tcpSocketManager } from '../services/tcpSocketManager';
+import { wifiDirectManager } from '../services/wifiDirectManager';
 import { alertManager } from '../services/alertManager';
 import { useLocation } from '../hooks/useLocation';
 import { useGeofence } from '../hooks/useGeofence';
+import { useCompass } from '../hooks/useCompass';
 import { isDemoMode } from '../utils/isDemoMode';
 import { stopDemo } from '../services/demoService';
+import { firestoreService } from '../services/firestoreService';
 import { SOSOverlay } from '../components/SOSOverlay';
+import { sendSOS } from '../services/sosService';
+import {
+  calculateDistance,
+  calculateBearing,
+  getCardinalDirection,
+  getRadarRingIndex,
+} from '../utils/geofence';
+import { getRadarHeading, isPhoneFacingHeadingSource } from '../utils/heading';
 
 const DEMO = isDemoMode();
 
@@ -52,10 +63,14 @@ export function TrackingScreen({ navigation }: any) {
   const myDeviceId = useTrackingStore((state) => state.myDeviceId);
   const addAlert = useTrackingStore((state) => state.addAlert);
   const setMeetupPoint = useTrackingStore((state) => state.setMeetupPoint);
+  const isTracking = useTrackingStore((state) => state.isTracking);
+  const connectionStatus = useTrackingStore((state) => state.connectionStatus);
+  const allowExitRef = useRef(false);
 
   const { user } = useAuthStore();
-  const userName = user?.displayName || user?.email?.split('@')[0] || 'Alex Johnson';
-  const userEmail = user?.email || 'alex.johnson@email.com';
+  const guestDefault = `Guest (${Platform.OS === 'android' ? (Platform.constants as any)?.Model || 'Traveler' : 'Traveler'})`;
+  const userName = user?.displayName || user?.email?.split('@')[0] || guestDefault;
+  const userEmail = user?.email || 'guest@traveltrack.app';
 
   const settings = useSettingsStore();
   const soundEnabled = settings?.soundEnabled ?? true;
@@ -63,9 +78,10 @@ export function TrackingScreen({ navigation }: any) {
   const toggleSound = settings?.toggleSound ?? (() => {});
   const toggleVibration = settings?.toggleVibration ?? (() => {});
 
-  // Start GPS tracking and geofence monitoring when this screen mounts
+  // Start GPS tracking, geofence monitoring, and reconnection coordinator
   const { startTracking, stopTracking } = useLocation();
   useGeofence(); // Actively monitors distances and triggers out-of-range alerts
+  const compass = useCompass(); // Phone orientation when supported; GPS course is informational only
 
   // Radar Animation
   const radarAnim = useRef(new Animated.Value(0)).current;
@@ -76,7 +92,13 @@ export function TrackingScreen({ navigation }: any) {
   useEffect(() => {
     // In demo mode GPS is simulated by demoService — skip real GPS tracking
     if (!DEMO) {
-      startTracking();
+      void startTracking().catch((error) => {
+        useTrackingStore.getState().setConnectionStatus('degraded');
+        Alert.alert(
+          'Location sharing did not start',
+          `${error?.message || 'Foreground location tracking is unavailable.'}\n\nYour device is not currently sending live GPS. Leave the group safely or fix permissions before relying on tracking.`
+        );
+      });
     }
 
     // Radar rotation
@@ -113,6 +135,15 @@ export function TrackingScreen({ navigation }: any) {
     }
   }, [activeTab]);
 
+  // An END_GROUP message clears the member store. Do not leave a member on a
+  // radar whose local group no longer exists.
+  useEffect(() => {
+    if (!isTracking) {
+      allowExitRef.current = true;
+      navigation.replace('Home');
+    }
+  }, [isTracking, navigation]);
+
   const spin = radarAnim.interpolate({
     inputRange: [0, 1],
     outputRange: ['0deg', '360deg'],
@@ -121,29 +152,83 @@ export function TrackingScreen({ navigation }: any) {
   // Calculate badge counts
   const unreadAlertsCount = alerts.filter(a => !a.read).length;
 
-  // Real members from the store — no demo fallback, show only real connected people
-  const displayMembers = members.map((m, idx) => ({
-    id: m.id,
-    name: m.name,
-    distance: m.latitude && myLocation
-      ? Math.round(calculateDistance(m.latitude, m.longitude, myLocation.latitude, myLocation.longitude))
-      : null,
-    status: m.status,
-    emoji: ['👩', '👨', '🧑', '👧', '👵'][idx % 5],
-    angle: (idx * 110 + 30) % 360,
-    batteryLevel: m.batteryLevel || 90,
-  }));
+  // Real members from the store — the current device is always centered, so
+  // exclude its echoed GROUP_STATE entry to avoid showing it twice.
+  const displayMembers = members.filter((m) => m.id !== myDeviceId).map((m, idx) => {
+    const isLeaderDevice = Boolean(m.isLeader || (group?.leaderId && m.id === group.leaderId));
 
+    // Use the latest valid position, retaining the last one after a member
+    // leaves Wi-Fi Direct range so the leader keeps an actionable direction.
+    const targetLat = Number.isFinite(m.latitude) && Number.isFinite(m.longitude)
+      ? m.latitude
+      : m.lastKnownLatitude;
+    const targetLng = Number.isFinite(m.latitude) && Number.isFinite(m.longitude)
+      ? m.longitude
+      : m.lastKnownLongitude;
 
-  function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
-    const R = 6371e3;
-    const φ1 = (lat1 * Math.PI) / 180;
-    const φ2 = (lat2 * Math.PI) / 180;
-    const Δφ = ((lat2 - lat1) * Math.PI) / 180;
-    const Δλ = ((lon2 - lon1) * Math.PI) / 180;
-    const a = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
-    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  }
+    const rawHasLocation = Boolean(
+      myLocation &&
+      Number.isFinite(targetLat) &&
+      Number.isFinite(targetLng) &&
+      !(targetLat === 0 && targetLng === 0)
+    );
+    const gpsDistance = rawHasLocation
+      ? calculateDistance(myLocation!.latitude, myLocation!.longitude, targetLat!, targetLng!)
+      : 0;
+    const accuracyMargin = Math.round(Math.max(0, myLocation?.accuracy || 0) + Math.max(0, m.accuracy || 0));
+    const now = Date.now();
+    const sourceFixTime = m.sourceFixReceivedAt || m.lastKnownTimestamp || 0;
+    const ageSeconds = sourceFixTime ? Math.round(Math.max(0, now - sourceFixTime) / 1000) : Infinity;
+    const isLive = ageSeconds <= 30 && m.connectionState !== 'disconnected';
+    const isStale = ageSeconds > 30 && ageSeconds <= 120 && m.connectionState !== 'disconnected';
+    const isOffline = ageSeconds > 120 || m.connectionState === 'disconnected';
+
+    // A peer remains visible on the radar up to 2 minutes after last packet arrival.
+    // Keep stale coordinates in member metadata, but do not plot an offline
+    // coordinate as though it were a current radar position.
+    const hasLocation = rawHasLocation && !isOffline;
+    const hasReliableBearing = hasLocation && gpsDistance > accuracyMargin && isLive;
+
+    const bearing = rawHasLocation
+      ? calculateBearing(myLocation!.latitude, myLocation!.longitude, targetLat!, targetLng!)
+      : 0;
+
+    let cardinal = 'GPS uncertain';
+    if (isOffline) {
+      cardinal = 'Last known position';
+    } else if (isStale) {
+      cardinal = `Stale (${ageSeconds}s ago)`;
+    } else if (hasReliableBearing) {
+      cardinal = getCardinalDirection(bearing);
+    }
+
+    const ringIndex = getRadarRingIndex(gpsDistance, radiusMeters);
+
+    // Icon assignment:
+    // Leader: 👑 (only if this member is the group leader!)
+    // Joined members: 👨, 👩, 🧑, 👧, 👵 (never crown!)
+    const avatarEmoji = isLeaderDevice ? '👑' : ['👨', '👩', '🧑', '👧', '👵'][idx % 5];
+
+    return {
+      id: m.id,
+      name: m.name,
+      distance: Math.round(gpsDistance),
+      accuracyMargin,
+      hasLocation,
+      isLive,
+      isStale,
+      isOffline,
+      ageSeconds,
+      status: m.status,
+      emoji: avatarEmoji,
+      isLeader: isLeaderDevice,
+      bearing,
+      cardinal,
+      ringIndex,
+      lastKnownTime: m.lastKnownTimestamp || m.lastSeen,
+      hasReliableBearing,
+    };
+  });
 
   const handleEndTracking = () => {
     Alert.alert(
@@ -156,14 +241,56 @@ export function TrackingScreen({ navigation }: any) {
         {
           text: 'Leave',
           style: 'destructive',
-          onPress: () => {
+          onPress: async () => {
+            if (role === 'leader') {
+              try {
+                if (group) tcpSocketManager.broadcast({
+                  type: 'END_GROUP', groupId: group.id, sessionId: group.sessionId,
+                  joinToken: group.joinToken, timestamp: Date.now(),
+                });
+                // Give buffered TCP writes a chance to reach members before the
+                // Group Owner and server are stopped.
+                await new Promise<void>((resolve) => setTimeout(resolve, 250));
+              } catch (error) {
+                console.warn('Could not notify all members that the group ended:', error);
+              }
+            }
+            if (role === 'leader' && user && group) {
+              try {
+                await firestoreService.saveTripAndIncrementCount(user.uid, {
+                  groupName: group.name,
+                  startTime: group.createdAt,
+                  endTime: Date.now(),
+                  memberCount: members.filter((member) => member.id !== myDeviceId).length + 1,
+                });
+              } catch (error) {
+                console.warn('Could not save completed trip:', error);
+                Alert.alert(
+                  'Trip History Not Saved',
+                  'Tracking has ended, but this trip could not be saved to the account. Check your connection before ending future trips.'
+                );
+              }
+            }
+            tcpSocketManager.disconnect();
+            tcpSocketManager.stopServer();
+            await wifiDirectManager.leaveGroup();
             if (resetTracking) resetTracking();
+            allowExitRef.current = true;
             navigation.replace('Home');
           },
         },
       ]
     );
   };
+
+  const hasPhoneFacingCompass = isPhoneFacingHeadingSource(compass.source);
+  const effectiveCompassHeading = getRadarHeading(compass.source, compass.heading);
+
+  useEffect(() => navigation.addListener('beforeRemove', (event: any) => {
+    if (allowExitRef.current || !isTracking) return;
+    event.preventDefault();
+    Alert.alert('Tracking is still active', 'Use “End Trip” or “Leave Group” so sockets, GPS, and the foreground notification are closed safely.');
+  }), [navigation, isTracking]);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -195,8 +322,12 @@ export function TrackingScreen({ navigation }: any) {
 
     try {
       if (tcpSocketManager) {
+        if (!group) return;
         const payloadData = {
           type: 'CHAT',
+          groupId: group.id,
+          sessionId: group.sessionId,
+          joinToken: group.joinToken,
           memberId: myDeviceId,
           memberName: userName,
           message: inputText,
@@ -261,57 +392,32 @@ export function TrackingScreen({ navigation }: any) {
 
     // Broadcast over TCP
     try {
+      if (!group) return;
       const payload = {
         type: 'MEETUP_POINT',
+        groupId: group.id,
+        sessionId: group.sessionId,
+        joinToken: group.joinToken,
         ...meetup,
       };
+      let sent = false;
       if (role === 'leader' && tcpSocketManager.broadcast) {
-        tcpSocketManager.broadcast(payload);
+        sent = tcpSocketManager.broadcast(payload) > 0;
       } else if (role === 'member' && tcpSocketManager.send) {
-        tcpSocketManager.send(payload);
+        sent = tcpSocketManager.send(payload);
       }
+      Alert.alert(sent ? 'Meetup sent' : 'Meetup saved locally', sent
+        ? `Meetup point "${meetupName}" was sent over the offline group connection.`
+        : 'No connected group device confirmed the transmission.');
     } catch (e) {
       console.warn('Failed to broadcast meetup point:', e);
     }
-
-    Alert.alert('📌 Meetup Sent!', `Meetup point "${meetupName}" has been broadcast to all group members.`);
   };
 
   // ----- SOS send function -----
   const handleSOS = () => {
-    Alert.alert(
-      '🆘 SOS Broadcasted!',
-      'Your emergency distress alert and current GPS location have been sent to all group members.',
-      [{ text: 'OK' }]
-    );
-
-    if (triggerSOS) {
-      triggerSOS('You');
-    }
-
-    if (alertManager && alertManager.triggerSOSAlert) {
-      alertManager.triggerSOSAlert('You', myLocation?.latitude || 0, myLocation?.longitude || 0);
-    }
-
-    // ✅ BUG FIX: Actually send SOS over TCP to other devices
-    try {
-      const sosPayload = {
-        type: 'SOS',
-        memberId: myDeviceId,
-        memberName: userName,
-        latitude: myLocation?.latitude || 0,
-        longitude: myLocation?.longitude || 0,
-        message: 'SOS emergency alert!',
-        timestamp: Date.now(),
-      };
-      if (role === 'leader' && tcpSocketManager.broadcast) {
-        tcpSocketManager.broadcast(sosPayload);
-      } else if (role === 'member' && tcpSocketManager.send) {
-        tcpSocketManager.send(sosPayload);
-      }
-    } catch (e) {
-      console.warn('Failed to send SOS over TCP:', e);
-    }
+    const result = sendSOS();
+    Alert.alert(result.sent ? 'SOS transmission started' : 'SOS not delivered', result.message);
   };
 
   // Renders the appropriate layout based on active tab
@@ -320,16 +426,25 @@ export function TrackingScreen({ navigation }: any) {
       case 'tracking':
         return (
           <ScrollView style={styles.tabScroll} contentContainerStyle={{ paddingBottom: 100 }} showsVerticalScrollIndicator={false}>
+            {connectionStatus !== 'connected' && (
+              <View style={styles.connectionWarning}>
+                <Text style={styles.connectionWarningText}>
+                  {connectionStatus === 'reconnecting' ? 'Reconnecting to the original group leader…' : 'Offline connection degraded. Positions shown may be last known.'}
+                </Text>
+              </View>
+            )}
             {/* Horizontal Active Friends Carousel */}
             <View style={styles.activeFriendsCard}>
               <View style={styles.friendsHeader}>
-                <Text style={styles.friendsTitle}>Active Friends</Text>
-                <Text style={styles.friendsCount}>{displayMembers.length + 1} online</Text>
+                <Text style={styles.friendsTitle}>Active Group Members</Text>
+              <Text style={styles.friendsCount}>{displayMembers.filter((member) => member.isLive).length + 1} online</Text>
               </View>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.friendsListScroll}>
+                {/* Own Device Avatar (Green Dot 🟢) */}
                 <View style={styles.friendAvatarWrapper}>
-                  <View style={[styles.avatarCircle, { borderColor: colors.safe }]}>
-                    <Text style={styles.avatarEmoji}>👑</Text>
+                  <View style={[styles.avatarCircle, { borderColor: colors.safe, backgroundColor: '#E6F4EA' }]}>
+                    <Text style={styles.avatarEmoji}>🟢</Text>
+                    {role === 'leader' && <Text style={styles.ownLeaderBadge}>👑</Text>}
                   </View>
                   <Text style={styles.friendName}>You</Text>
                 </View>
@@ -339,6 +454,11 @@ export function TrackingScreen({ navigation }: any) {
                       <Text style={styles.avatarEmoji}>{m.emoji}</Text>
                     </View>
                     <Text style={styles.friendName} numberOfLines={1}>{m.name.split(' ')[0]}</Text>
+                    {m.hasLocation && (
+                      <Text style={{ fontSize: 9, color: '#64748B', textAlign: 'center' }}>
+                        ~{m.distance}m {m.cardinal}
+                      </Text>
+                    )}
                   </View>
                 ))}
               </ScrollView>
@@ -346,28 +466,82 @@ export function TrackingScreen({ navigation }: any) {
 
             {/* Circular Radar Visualizer (acting as geofence map) */}
             <View style={styles.radarCard}>
+              <View style={styles.radarHeaderInfo}>
+                <Text style={styles.radarTitle}>📍 Group Safety Radar</Text>
+                <Text style={styles.radarSubtitle}>
+                  {hasPhoneFacingCompass
+                    ? `🧭 ${compass.statusText}: ${compass.heading}° (${getCardinalDirection(compass.heading)}) • Safe radius: ${radiusMeters}m`
+                    : compass.source === 'gps-course'
+                      ? `🧭 Compass unavailable • North-Up • GPS course: ${compass.heading}° (${getCardinalDirection(compass.heading)}) • Safe radius: ${radiusMeters}m`
+                      : `🧭 ${compass.statusText} • North-Up • Safe radius: ${radiusMeters}m`}
+                </Text>
+              </View>
+
               <View style={styles.radarContainer}>
                 <View style={styles.radarOuterCircle}>
+                  {/* Rotate only from a true phone-orientation sensor; otherwise remain north-up. */}
+                  {(() => {
+                    const devHeading = effectiveCompassHeading;
+                    // Angles for N (0°), E (90°), S (180°), W (270°) relative to device heading
+                    const getCardPos = (targetAngle: number, radius: number = 105) => {
+                      const relAngle = targetAngle - devHeading;
+                      const rad = (relAngle * Math.PI) / 180;
+                      return {
+                        x: radius * Math.sin(rad),
+                        y: -radius * Math.cos(rad),
+                      };
+                    };
+                    const nPos = getCardPos(0);
+                    const ePos = getCardPos(90);
+                    const sPos = getCardPos(180);
+                    const wPos = getCardPos(270);
+
+                    return (
+                      <>
+                        <Text style={[styles.cardinalText, { transform: [{ translateX: nPos.x }, { translateY: nPos.y }] }]}>N</Text>
+                        <Text style={[styles.cardinalText, { transform: [{ translateX: ePos.x }, { translateY: ePos.y }] }]}>E</Text>
+                        <Text style={[styles.cardinalText, { transform: [{ translateX: sPos.x }, { translateY: sPos.y }] }]}>S</Text>
+                        <Text style={[styles.cardinalText, { transform: [{ translateX: wPos.x }, { translateY: wPos.y }] }]}>W</Text>
+                      </>
+                    );
+                  })()}
+
+                  {/* Concentric Distance Rings */}
                   <View style={styles.radarMiddleCircle} />
                   <View style={styles.radarInnerCircle} />
                   
                   {/* Animated Sweep Line */}
                   <Animated.View style={[styles.radarSweep, { transform: [{ rotate: spin }] }]} />
 
-                  {/* Leader Dot (Center) */}
-                  <View style={styles.leaderCenterDot}>
-                    <Text style={styles.leaderDotEmoji}>👑</Text>
+                  {/* The arrow is truthful only when a phone-facing heading exists. */}
+                  <View style={styles.ownCenterDot}>
+                    {hasPhoneFacingCompass && (
+                      <Text style={{ fontSize: 10, color: '#3B82F6', fontWeight: 'bold' }}>▲</Text>
+                    )}
+                    <Text style={styles.ownDotEmoji}>🟢</Text>
+                    {role === 'leader' && <Text style={styles.ownLeaderBadge}>👑</Text>}
                   </View>
 
-                  {/* Member Dots mapped dynamically on radar */}
-                  {displayMembers.map((m) => {
-                    const maxVisualRadius = 90;
-                    const percentage = Math.min((m.distance ?? 0) / (radiusMeters * 1.2), 1);
-                    const visualDist = percentage * maxVisualRadius;
+                  {/* GPS distance sets the ring. Direction is phone-relative only with a real compass. */}
+                  {displayMembers.filter((m) => m.hasLocation).map((m) => {
+                    let visualDist = 0;
+                    if (m.status === 'out_of_range' || m.distance > radiusMeters) {
+                      visualDist = 104; // Placed at outer edge boundary
+                    } else if (m.ringIndex === 1) {
+                      visualDist = 14 + (m.distance / (radiusMeters * 0.33)) * 22; // Inner Ring
+                    } else if (m.ringIndex === 2) {
+                      visualDist = 38 + ((m.distance - radiusMeters * 0.33) / (radiusMeters * 0.33)) * 30; // Mid Ring
+                    } else {
+                      visualDist = 70 + ((m.distance - radiusMeters * 0.66) / (radiusMeters * 0.34)) * 28; // Outer Ring
+                    }
                     
-                    const radAngle = (m.angle * Math.PI) / 180;
-                    const xOffset = visualDist * Math.cos(radAngle);
-                    const yOffset = visualDist * Math.sin(radAngle);
+                    // Convert target bearing relative to device heading to screen offsets (0° = Top of screen = -Y)
+                    const relBearing = m.bearing - effectiveCompassHeading;
+                    const radAngle = (relBearing * Math.PI) / 180;
+                    const xOffset = visualDist * Math.sin(radAngle);
+                    const yOffset = -visualDist * Math.cos(radAngle);
+
+                    const isOutOfRange = m.status === 'out_of_range';
 
                     return (
                       <View
@@ -377,13 +551,53 @@ export function TrackingScreen({ navigation }: any) {
                           {
                             transform: [{ translateX: xOffset }, { translateY: yOffset }],
                             backgroundColor: getStatusColor(m.status),
+                            borderColor: isOutOfRange ? '#EF4444' : '#FFFFFF',
+                            borderWidth: isOutOfRange ? 2.5 : 2,
+                            opacity: m.isStale ? 0.45 : (m.hasReliableBearing ? 1 : 0.75),
                           },
                         ]}
                       >
                         <Text style={styles.memberRadarDotEmoji}>{m.emoji}</Text>
+                        {isOutOfRange ? (
+                          <View style={styles.lostBadgeContainer}>
+                            <Text style={styles.lostBadgeText}>Outside • {m.cardinal}</Text>
+                          </View>
+                        ) : m.isStale ? (
+                          <View style={[styles.lostBadgeContainer, { backgroundColor: 'rgba(234, 179, 8, 0.9)' }]}>
+                            <Text style={styles.lostBadgeText}>Stale {m.ageSeconds}s</Text>
+                          </View>
+                        ) : null}
                       </View>
                     );
                   })}
+                </View>
+              </View>
+
+              {/* Magnetometer Confidence & Radar Ring Legend */}
+              {compass.source === 'magnetometer' && !compass.isCalibrated && (
+                <Text style={[styles.radarAccuracyNote, { color: '#D97706', fontWeight: '600' }]}>
+                  ⚠️ {compass.statusText}
+                </Text>
+              )}
+              <Text style={styles.radarAccuracyNote}>
+                {hasPhoneFacingCompass
+                  ? 'Up arrow (▲) indicates the direction your phone is physically facing. Rotating your phone rotates the radar map.'
+                  : compass.source === 'gps-course'
+                    ? 'Compass hardware is unavailable. Radar stays North-Up; GPS course shows movement direction only, not phone-facing direction.'
+                    : 'Compass hardware is unavailable. Radar stays North-Up, with member positions shown by their GPS direction from north.'}
+              </Text>
+              <View style={styles.radarLegendRow}>
+                <View style={styles.legendItem}>
+                  <View style={[styles.legendDot, { backgroundColor: 'rgba(10, 74, 109, 0.4)' }]} />
+                  <Text style={styles.legendText}>Ring 1: Inner</Text>
+                </View>
+                <View style={styles.legendItem}>
+                  <View style={[styles.legendDot, { backgroundColor: 'rgba(10, 74, 109, 0.25)' }]} />
+                  <Text style={styles.legendText}>Ring 2: Mid</Text>
+                </View>
+                <View style={styles.legendItem}>
+                  <View style={[styles.legendDot, { backgroundColor: '#EF4444' }]} />
+                  <Text style={styles.legendText}>Ring 3: Outer ({radiusMeters}m)</Text>
                 </View>
               </View>
             </View>
@@ -410,18 +624,12 @@ export function TrackingScreen({ navigation }: any) {
         );
 
       case 'messages':
-        const displayMessages = messages.length > 0
-          ? messages.map(msg => ({
-              id: msg.id,
-              senderName: msg.senderName,
-              text: msg.text,
-              mine: msg.senderId === myDeviceId,
-            }))
-          : [
-              { id: '1', senderName: 'Sarah Mendis', text: 'Everyone ready to head out?', mine: false },
-              { id: '2', senderName: 'You', text: 'Yes! On my way to the meeting point.', mine: true },
-              { id: '3', senderName: 'Mike Perera', text: "I'm at the entrance already", mine: false },
-            ];
+        const displayMessages = messages.map(msg => ({
+          id: msg.id,
+          senderName: msg.senderName,
+          text: msg.text,
+          mine: msg.senderId === myDeviceId,
+        }));
 
         return (
           <KeyboardAvoidingView
@@ -433,7 +641,14 @@ export function TrackingScreen({ navigation }: any) {
               ref={chatListRef}
               data={displayMessages}
               keyExtractor={(item) => item.id}
-              contentContainerStyle={{ padding: 20, paddingBottom: 30 }}
+              style={{ flex: 1 }}
+              contentContainerStyle={{ paddingVertical: 12 }}
+              onContentSizeChange={() => chatListRef.current?.scrollToEnd({ animated: true })}
+              ListEmptyComponent={
+                <View style={{ flex: 1, paddingVertical: 40, alignItems: 'center', justifyContent: 'center' }}>
+                  <Text style={{ fontSize: 14, color: '#94A3B8' }}>💬 No messages in group chat yet.</Text>
+                </View>
+              }
               renderItem={({ item }) => (
                 <View style={[styles.msgRow, item.mine ? styles.msgRowMine : styles.msgRowOther]}>
                   {!item.mine && <Text style={styles.msgSenderName}>{item.senderName}</Text>}
@@ -508,12 +723,7 @@ export function TrackingScreen({ navigation }: any) {
           </ScrollView>
         );
 
-      case 'alerts':
-        const displayAlerts = alerts.length > 0 ? alerts : [
-          { id: '1', type: 'out_of_range', memberName: 'Jack Silva', message: 'Jack is 75m away from the group. Last seen 2 minutes ago.', timestamp: Date.now() - 1000 * 60 * 2 },
-          { id: '2', type: 'meetup', memberName: 'Sarah Mendis', message: 'Sarah set a meetup point at Central Park Entrance', timestamp: Date.now() - 1000 * 60 * 15 },
-          { id: '3', type: 'returned', memberName: 'Mike Perera', message: 'Mike has returned to the group safe range.', timestamp: Date.now() - 1000 * 60 * 30 },
-        ];
+        const displayAlerts = alerts;
 
         const getAlertIcon = (type: string) => {
           switch (type) {
@@ -551,23 +761,29 @@ export function TrackingScreen({ navigation }: any) {
               </Text>
             </View>
 
-            {displayAlerts.map((alert) => {
-              const minutesAgo = Math.max(1, Math.round((Date.now() - alert.timestamp) / (1000 * 60)));
-              const timeString = minutesAgo < 60 ? `${minutesAgo} min ago` : `${Math.round(minutesAgo/60)} hours ago`;
+            {displayAlerts.length === 0 ? (
+              <View style={{ paddingVertical: 40, alignItems: 'center', justifyContent: 'center' }}>
+                <Text style={{ fontSize: 14, color: '#94A3B8' }}>🔔 No activity alerts logged yet.</Text>
+              </View>
+            ) : (
+              displayAlerts.map((alert) => {
+                const minutesAgo = Math.max(1, Math.round((Date.now() - alert.timestamp) / (1000 * 60)));
+                const timeString = minutesAgo < 60 ? `${minutesAgo} min ago` : `${Math.round(minutesAgo/60)} hours ago`;
 
-              return (
-                <View key={alert.id} style={styles.alertCard}>
-                  <View style={[styles.alertIconCircle, { backgroundColor: getAlertIconColor(alert.type) + '15' }]}>
-                    <Text style={{ fontSize: 18 }}>{getAlertIcon(alert.type)}</Text>
+                return (
+                  <View key={alert.id} style={styles.alertCard}>
+                    <View style={[styles.alertIconCircle, { backgroundColor: getAlertIconColor(alert.type) + '15' }]}>
+                      <Text style={{ fontSize: 18 }}>{getAlertIcon(alert.type)}</Text>
+                    </View>
+                    <View style={styles.alertCardDetails}>
+                      <Text style={styles.alertCardTitle}>{alert.type === 'out_of_range' ? 'Member Outside Radius' : alert.type === 'meetup' ? 'New Meetup Point' : 'Alert'}</Text>
+                      <Text style={styles.alertCardText}>{alert.message}</Text>
+                      <Text style={styles.alertTime}>{timeString}</Text>
+                    </View>
                   </View>
-                  <View style={styles.alertCardDetails}>
-                    <Text style={styles.alertCardTitle}>{alert.type === 'out_of_range' ? 'Member Outside Radius' : alert.type === 'meetup' ? 'New Meetup Point' : 'Alert'}</Text>
-                    <Text style={styles.alertCardText}>{alert.message}</Text>
-                    <Text style={styles.alertTime}>{timeString}</Text>
-                  </View>
-                </View>
-              );
-            })}
+                );
+              })
+            )}
           </ScrollView>
         );
 
@@ -592,19 +808,19 @@ export function TrackingScreen({ navigation }: any) {
             </View>
 
             {/* Stats Block */}
-            <View style={styles.statsCardGrid}>
-              <View style={styles.statGridItem}>
-                <Text style={styles.statGridVal}>12</Text>
-                <Text style={styles.statGridLabel}>Trips</Text>
-              </View>
-              <View style={styles.statGridItem}>
-                <Text style={styles.statGridVal}>5</Text>
-                <Text style={styles.statGridLabel}>Groups</Text>
-              </View>
-              <View style={styles.statGridItem}>
-                <Text style={styles.statGridVal}>48h</Text>
-                <Text style={styles.statGridLabel}>Tracked</Text>
-              </View>
+              <View style={styles.statsCardGrid}>
+                <View style={styles.statGridItem}>
+                  <Text style={styles.statGridVal}>{members.filter((member) => member.id !== myDeviceId).length + 1}</Text>
+                  <Text style={styles.statGridLabel}>Members</Text>
+                </View>
+                <View style={styles.statGridItem}>
+                  <Text style={styles.statGridVal}>{radiusMeters}m</Text>
+                  <Text style={styles.statGridLabel}>Safe Radius</Text>
+                </View>
+                <View style={styles.statGridItem}>
+                  <Text style={styles.statGridVal}>{role === 'leader' ? 'Host' : 'Member'}</Text>
+                  <Text style={styles.statGridLabel}>Group Role</Text>
+                </View>
             </View>
 
             {/* Settings Toggles List */}
@@ -615,12 +831,13 @@ export function TrackingScreen({ navigation }: any) {
                   <Text style={styles.settingItemIcon}>🔔</Text>
                   <View>
                     <Text style={styles.settingItemLabel}>Sound Alerts</Text>
-                    <Text style={styles.settingItemDesc}>Play alert boundary sirens</Text>
+                    <Text style={styles.settingItemDesc}>Not available in this build</Text>
                   </View>
                 </View>
                 <Switch
                   value={soundEnabled}
                   onValueChange={toggleSound}
+                  disabled
                   trackColor={{ false: '#CBD5E1', true: 'rgba(10, 74, 109, 0.5)' }}
                   thumbColor={soundEnabled ? '#0A4A6D' : '#F8F9FA'}
                 />
@@ -693,7 +910,9 @@ export function TrackingScreen({ navigation }: any) {
   const getHeaderSubtitle = () => {
     switch (activeTab) {
       case 'tracking':
-        return myLocation ? 'Times Square, NYC' : 'Active Connection';
+        return myLocation
+          ? `GPS accuracy ±${Math.round(myLocation.accuracy || 0)}m`
+          : 'Waiting for a GPS fix';
       case 'messages':
         return 'chat with your friends';
       case 'emergency':
@@ -778,6 +997,8 @@ export function TrackingScreen({ navigation }: any) {
 }
 
 const styles = StyleSheet.create({
+  connectionWarning: { backgroundColor: '#FFF7ED', borderColor: '#FB923C', borderWidth: 1, borderRadius: 12, padding: 12, marginBottom: 12 },
+  connectionWarningText: { color: '#9A3412', fontSize: 13, fontWeight: '700', textAlign: 'center' },
   safe: {
     flex: 1,
     backgroundColor: '#F8F9FA',
@@ -906,6 +1127,28 @@ const styles = StyleSheet.create({
     elevation: 2,
     paddingVertical: 20,
   },
+  radarHeaderInfo: {
+    paddingHorizontal: 16,
+    marginBottom: 12,
+    alignItems: 'center',
+  },
+  radarTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#0A4A6D',
+  },
+  radarSubtitle: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 2,
+  },
+  radarAccuracyNote: {
+    color: '#64748B',
+    fontSize: 11,
+    lineHeight: 16,
+    marginTop: 10,
+    textAlign: 'center',
+  },
   radarContainer: {
     alignItems: 'center',
     justifyContent: 'center',
@@ -949,34 +1192,64 @@ const styles = StyleSheet.create({
     bottom: '50%',
     backgroundColor: 'transparent',
   },
-  leaderCenterDot: {
+  ownCenterDot: {
     position: 'absolute',
+    top: '50%',
+    left: '50%',
     width: 32,
     height: 32,
+    marginTop: -16,
+    marginLeft: -16,
     borderRadius: 16,
-    backgroundColor: '#ffffff',
+    backgroundColor: '#E6F4EA',
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#000',
+    shadowColor: '#10B981',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 3,
-    borderWidth: 1.5,
-    borderColor: '#0A4A6D',
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 4,
+    borderWidth: 2,
+    borderColor: '#10B981',
   },
-  leaderDotEmoji: {
-    fontSize: 15,
+  ownDotEmoji: {
+    fontSize: 14,
   },
+  ownLeaderBadge: {
+    position: 'absolute',
+    top: -8,
+    right: -6,
+    fontSize: 12,
+  },
+  cardinalText: {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    width: 20,
+    height: 20,
+    marginTop: -10,
+    marginLeft: -10,
+    textAlign: 'center',
+    lineHeight: 20,
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#64748B',
+  },
+  cardinalN: { top: 4 },
+  cardinalE: { right: 8 },
+  cardinalS: { bottom: 4 },
+  cardinalW: { left: 8 },
   memberRadarDot: {
     position: 'absolute',
+    top: '50%',
+    left: '50%',
     width: 28,
     height: 28,
+    marginTop: -14,
+    marginLeft: -14,
     borderRadius: 14,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 2,
-    borderColor: '#ffffff',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.15,
@@ -985,6 +1258,43 @@ const styles = StyleSheet.create({
   },
   memberRadarDotEmoji: {
     fontSize: 13,
+  },
+  lostBadgeContainer: {
+    position: 'absolute',
+    top: -18,
+    minWidth: 64,
+    backgroundColor: '#EF4444',
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 6,
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  lostBadgeText: {
+    color: '#ffffff',
+    fontSize: 8,
+    fontWeight: 'bold',
+  },
+  radarLegendRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginTop: 16,
+    paddingHorizontal: 12,
+  },
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  legendDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  legendText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#64748B',
   },
   quickActionsContainer: {
     flexDirection: 'row',

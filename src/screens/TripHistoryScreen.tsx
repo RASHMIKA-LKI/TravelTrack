@@ -4,12 +4,12 @@ import {
   View,
   Text,
   StyleSheet,
-  SafeAreaView,
   FlatList,
   TouchableOpacity,
   ActivityIndicator,
   StatusBar,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../theme/colors';
 import { useAuthStore } from '../store/useAuthStore';
 import { firestoreService } from '../services/firestoreService';
@@ -32,7 +32,7 @@ export function TripHistoryScreen({ navigation }: any) {
           setTrips(history);
         }
       } catch (e) {
-        console.warn('Trip history read error, using mockup data for display review.', e);
+        console.warn('Trip history read error:', e);
       } finally {
         setLoading(false);
       }
@@ -40,32 +40,7 @@ export function TripHistoryScreen({ navigation }: any) {
     loadHistory();
   }, [user]);
 
-  // Fallback demo data
-  const fallbackTrips: TripRecord[] = [
-    {
-      id: 't1',
-      groupName: 'Hanthana Peak Hike',
-      startTime: Date.now() - 1000 * 60 * 60 * 24 * 3, // 3 days ago
-      endTime: Date.now() - 1000 * 60 * 60 * 24 * 3 + 1000 * 60 * 60 * 4.5, // 4.5 hours duration
-      memberCount: 5,
-    },
-    {
-      id: 't2',
-      groupName: 'Ella Rock Trekking',
-      startTime: Date.now() - 1000 * 60 * 60 * 24 * 8, // 8 days ago
-      endTime: Date.now() - 1000 * 60 * 60 * 24 * 8 + 1000 * 60 * 60 * 3, // 3 hours duration
-      memberCount: 4,
-    },
-    {
-      id: 't3',
-      groupName: 'Knuckles Range Camp',
-      startTime: Date.now() - 1000 * 60 * 60 * 24 * 15, // 15 days ago
-      endTime: Date.now() - 1000 * 60 * 60 * 24 * 15 + 1000 * 60 * 60 * 8, // 8 hours duration
-      memberCount: 7,
-    },
-  ];
-
-  const displayTrips = trips.length > 0 ? trips : fallbackTrips;
+  const displayTrips = trips;
 
   const formatDate = (timestamp: number) => {
     return new Date(timestamp).toLocaleDateString([], {

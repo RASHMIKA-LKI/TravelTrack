@@ -1,23 +1,24 @@
 // src/screens/ScanScreen.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
   TouchableOpacity,
   StyleSheet,
   FlatList,
-  SafeAreaView,
   ActivityIndicator,
   Alert,
   StatusBar,
   Animated,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../theme/colors';
 import { useWifiDirect } from '../hooks/useWifiDirect';
 import { useTrackingStore } from '../store/useTrackingStore';
 import { isDemoMode } from '../utils/isDemoMode';
 import { startDemo, DEMO_PEERS } from '../services/demoService';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import { parseGroupInvitation } from '../utils/sessionProtocol';
 
 const DEMO = isDemoMode();
 
@@ -27,11 +28,18 @@ export function ScanScreen({ navigation }: any) {
   const [showScanner, setShowScanner] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
   const pulseAnim = React.useRef(new Animated.Value(1)).current;
+  const qrLockedRef = useRef(false);
 
   const { startScanning, connectToLeader } = useWifiDirect();
   const setRole = useTrackingStore((state) => state.setRole);
+  const pendingInvitation = useTrackingStore((state) => state.pendingInvitation);
+  const setPendingInvitation = useTrackingStore((state) => state.setPendingInvitation);
 
   const handleQRScanned = async (scannedModel: string) => {
+    // Expo camera may emit the same barcode for several frames. One scan must
+    // produce one discovery session, never several competing P2P requests.
+    if (qrLockedRef.current) return;
+    qrLockedRef.current = true;
     setShowScanner(false);
     if (!scannedModel) return;
 
@@ -44,60 +52,19 @@ export function ScanScreen({ navigation }: any) {
     }
     // ──────────────────────────────────────────────────────────
 
-    setScanning(true);
-    let connected = false;
-    let latestPeers: any[] = [];
-
-    let timeoutId = setTimeout(() => {
-      if (!connected) {
-        setScanning(false);
-        const visibleDevicesList = latestPeers
-          .map(p => `• ${p.deviceName || 'Unknown'} (${p.deviceAddress})`)
-          .join('\n');
-        
-        Alert.alert(
-          'Host Not Found',
-          `Could not locate a P2P host device with ID containing "${scannedModel}" nearby.\n\n` +
-          `Discovered devices:\n${visibleDevicesList || 'No devices discovered'}\n\n` +
-          `Make sure Phone A has "Start Hosting Group" active and is close to you.`
-        );
-      }
-    }, 18000); // 18s timeout
-
-    try {
-      await startScanning(async (foundPeers) => {
-        latestPeers = foundPeers;
-        if (connected || !foundPeers || foundPeers.length === 0) return;
-
-        // Search for target peer:
-        // 1. Exact or partial string match between Wi-Fi Direct name and QR model string
-        // 2. Fallback: If only 1 peer is broadcasting nearby, assume it's the leader!
-        const targetPeer = foundPeers.find(p => {
-          if (!p || !p.deviceName) return false;
-          const name = p.deviceName.toUpperCase();
-          const target = scannedModel.toUpperCase();
-          return name.includes(target) || target.includes(name);
-        }) || (foundPeers.length === 1 ? foundPeers[0] : null);
-
-        if (targetPeer) {
-          connected = true;
-          clearTimeout(timeoutId);
-          setScanning(false);
-          
-          try {
-            await connectToLeader(targetPeer.deviceAddress);
-            setRole('member');
-            navigation.navigate('GroupLobby', { isLeader: false, groupName: targetPeer.deviceName });
-          } catch (err: any) {
-            Alert.alert('Connection Failed', err.message);
-          }
-        }
-      });
-    } catch (e: any) {
-      clearTimeout(timeoutId);
-      setScanning(false);
-      Alert.alert('Scan Failed', e.message);
+    const invitation = parseGroupInvitation(scannedModel);
+    if (!invitation) {
+      qrLockedRef.current = false;
+      Alert.alert('Invalid invitation', 'Scan the QR code shown in the leader’s TravelTrack lobby.');
+      return;
     }
+
+    setPendingInvitation(invitation);
+
+    // The QR code confirms the invitation but cannot safely contain a volatile
+    // Wi-Fi Direct MAC address. Show the discovered hosts and let the traveller
+    // choose the nearby leader instead of guessing from a model name.
+    await startScan(true);
   };
 
   const openScanner = async () => {
@@ -109,6 +76,7 @@ export function ScanScreen({ navigation }: any) {
         return;
       }
     }
+    qrLockedRef.current = false;
     setShowScanner(true);
   };
 
@@ -133,7 +101,11 @@ export function ScanScreen({ navigation }: any) {
     }
   }, [scanning]);
 
-  const startScan = async () => {
+  const startScan = async (invitationJustScanned = false) => {
+    if (!DEMO && !invitationJustScanned && !useTrackingStore.getState().pendingInvitation) {
+      Alert.alert('Invitation required', 'Scan the QR code in the leader’s lobby before choosing a nearby Wi-Fi Direct host.');
+      return;
+    }
     setScanning(true);
     setDevices([]);
 
@@ -174,10 +146,11 @@ export function ScanScreen({ navigation }: any) {
 
     try {
       if (connectToLeader) {
-        await connectToLeader(device.deviceAddress);
+        if (!pendingInvitation) throw new Error('The invitation is missing or expired. Scan the leader QR code again.');
+        await connectToLeader(device.deviceAddress, pendingInvitation);
       }
       if (setRole) setRole('member');
-      navigation.navigate('GroupLobby', { isLeader: false, groupName: device.deviceName });
+      navigation.navigate('GroupLobby', { isLeader: false, groupName: useTrackingStore.getState().group?.name || device.deviceName });
     } catch (e: any) {
       Alert.alert(
         'Connection Failed',
@@ -246,7 +219,7 @@ export function ScanScreen({ navigation }: any) {
           ) : null}
           <TouchableOpacity
             style={[styles.scanCircleBtn, scanning ? styles.scanCircleBtnScanning : null]}
-            onPress={startScan}
+            onPress={() => startScan(false)}
             disabled={scanning}
             activeOpacity={0.8}
           >

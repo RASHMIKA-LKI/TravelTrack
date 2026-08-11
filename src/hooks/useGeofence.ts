@@ -1,106 +1,98 @@
-// src/hooks/useGeofence.ts
-import { useEffect, useRef } from 'react';
-import { useTrackingStore } from '../store/useTrackingStore';
+import { useEffect, useRef, useState } from 'react';
 import { alertManager } from '../services/alertManager';
+import { tcpSocketManager } from '../services/tcpSocketManager';
+import { useTrackingStore } from '../store/useTrackingStore';
+import { MemberSafetyStatus } from '../types/models';
 import { calculateDistance, getMemberStatus } from '../utils/geofence';
 import { isDemoMode } from '../utils/isDemoMode';
+import { getLocalFixAgeMs, getLocationFreshness } from '../utils/trackingFreshness';
 
-/**
- * Watches all member positions against the leader's location and triggers
- * alerts whenever someone goes out of the safe radius or returns.
- *
- * ⚠️  Only call this hook on the TrackingScreen.
- *
- * THE INFINITE LOOP BUG (now fixed):
- * ────────────────────────────────────
- * The previous version called `updateMemberLocation()` unconditionally on
- * every effect run. Since `members` was a dependency, that write → re-render
- * → re-run → write → … caused "Maximum update depth exceeded".
- *
- * Fix: only write to the store when the status has actually changed.
- * We track the last-known status of each member in a ref so we never
- * re-render unnecessarily.
- */
+/** Leader-owned, freshness-aware geofence state machine. */
 export function useGeofence() {
-  const members        = useTrackingStore((state) => state.members);
-  const myLocation     = useTrackingStore((state) => state.myLocation);
-  const radiusMeters   = useTrackingStore((state) => state.radiusMeters);
-  const updateMemberLocation = useTrackingStore((state) => state.updateMemberLocation);
-  const addAlert       = useTrackingStore((state) => state.addAlert);
-
-  // Track last-known status for each member so we don't write to the store
-  // unless something actually changed (prevents the infinite loop).
-  const lastStatusRef = useRef<Record<string, string>>({});
+  const members = useTrackingStore((state) => state.members);
+  const myLocation = useTrackingStore((state) => state.myLocation);
+  const radiusMeters = useTrackingStore((state) => state.radiusMeters);
+  const role = useTrackingStore((state) => state.role);
+  const [clockTick, setClockTick] = useState(0);
+  const lastStatusRef = useRef<Record<string, MemberSafetyStatus>>({});
+  const everOutRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    // Nothing to do if we don't have our own location yet
-    if (!myLocation) return;
+    const timer = setInterval(() => setClockTick((value) => value + 1), 5_000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (role !== 'leader' || !myLocation) return;
+    const store = useTrackingStore.getState();
+    const group = store.group;
+    const now = Date.now();
+
+    // A stale leader fix cannot safely classify anybody relative to the leader.
+    const leaderFixLive = getLocalFixAgeMs(myLocation.timestamp, now) <= 30_000;
 
     members.forEach((member) => {
-      // Skip members who haven't reported a location yet
-      if (!member.latitude || !member.longitude) return;
+      if (member.id === store.myDeviceId || member.id === 'me') return;
+      const previous = lastStatusRef.current[member.id];
+      const freshness = getLocationFreshness(member.sourceFixReceivedAt, now);
+      let next: MemberSafetyStatus;
+      let distance = 0;
 
-      const distance = calculateDistance(
-        member.latitude,
-        member.longitude,
-        myLocation.latitude,
-        myLocation.longitude
-      );
+      if (!leaderFixLive) {
+        next = 'gps_uncertain';
+      } else if (member.connectionState === 'disconnected' || freshness === 'offline') {
+        next = 'disconnected';
+      } else if (freshness !== 'live') {
+        next = 'gps_uncertain';
+      } else if (
+        !Number.isFinite(member.latitude) || !Number.isFinite(member.longitude) ||
+        (member.latitude === 0 && member.longitude === 0)
+      ) {
+        next = 'unknown';
+      } else {
+        distance = calculateDistance(member.latitude, member.longitude, myLocation.latitude, myLocation.longitude);
+        const uncertainty = Math.max(0, myLocation.accuracy || 0) + Math.max(0, member.accuracy || 0);
+        next = uncertainty > Math.max(100, radiusMeters * 2)
+          ? 'gps_uncertain'
+          : getMemberStatus(distance, radiusMeters, uncertainty);
+      }
 
-      const newStatus = getMemberStatus(distance, radiusMeters);
-      const prevStatus = lastStatusRef.current[member.id];
+      if (next === previous) return;
+      lastStatusRef.current[member.id] = next;
+      store.updateMemberLocation(member.id, {
+        status: next,
+        ...(next === 'out_of_range' ? {
+          lastKnownLatitude: member.latitude,
+          lastKnownLongitude: member.longitude,
+          lastKnownTimestamp: member.sourceFixReceivedAt ?? now,
+        } : {}),
+      });
 
-      // ── KEY FIX ─────────────────────────────────────────────────────────────
-      // Only write to the store when the status has actually changed.
-      // Unconditionally writing on every effect run causes:
-      //   members changes → effect re-runs → writes → members changes → …
-      // ─────────────────────────────────────────────────────────────────────────
-      if (newStatus !== prevStatus) {
-        lastStatusRef.current[member.id] = newStatus;
-        updateMemberLocation(member.id, { status: newStatus });
-
-        // Just went OUT OF RANGE
-        if (newStatus === 'out_of_range' && prevStatus !== undefined) {
-          // Only alert on first time out — not on initial mount
-          if (isDemoMode()) {
-            // In demo mode skip vibration but still add to alert log
-            addAlert({
-              type: 'out_of_range',
-              memberName: member.name,
-              message: `${member.name} is ${Math.round(distance)}m away — out of safe zone`,
-            });
-          } else {
-            alertManager.triggerOutOfRangeAlert(member.name, distance);
-            addAlert({
-              type: 'out_of_range',
-              memberName: member.name,
-              message: `${member.name} is ${Math.round(distance)}m away — out of safe zone`,
-            });
-          }
-        }
-
-        // Just RETURNED to safe zone
-        if (newStatus === 'safe' && prevStatus === 'out_of_range') {
-          if (isDemoMode()) {
-            addAlert({
-              type: 'returned',
-              memberName: member.name,
-              message: `${member.name} returned to safe zone ✅`,
-            });
-          } else {
-            alertManager.triggerReturnAlert(member.name);
-            addAlert({
-              type: 'returned',
-              memberName: member.name,
-              message: `${member.name} returned to safe zone ✅`,
-            });
-          }
-        }
+      if (next === 'out_of_range') {
+        everOutRef.current.add(member.id);
+        if (!isDemoMode()) alertManager.triggerOutOfRangeAlert(member.name, distance);
+        store.addAlert({
+          type: 'out_of_range', memberName: member.name,
+          message: `${member.name} is about ${Math.round(distance)}m away and outside the safe zone.`,
+        });
+        if (group && !isDemoMode()) tcpSocketManager.broadcast({
+          type: 'ALERT_OUT_OF_RANGE', groupId: group.id, sessionId: group.sessionId,
+          joinToken: group.joinToken, memberId: member.id, memberName: member.name,
+          distance, timestamp: now,
+        });
+      } else if (next === 'safe' && everOutRef.current.has(member.id)) {
+        everOutRef.current.delete(member.id);
+        if (!isDemoMode()) alertManager.triggerReturnAlert(member.name);
+        store.addAlert({ type: 'returned', memberName: member.name, message: `${member.name} returned to the safe zone.` });
+      } else if ((next === 'gps_uncertain' || next === 'disconnected') && previous !== undefined) {
+        store.addAlert({
+          type: next === 'disconnected' ? 'connection_lost' : 'gps_uncertain',
+          memberName: member.name,
+          message: next === 'disconnected'
+            ? `${member.name} is disconnected; the displayed point is last known, not live.`
+            : `Location data for ${member.name} or the leader is stale or too uncertain for a boundary decision.`,
+        });
       }
     });
-  // ⚠️  Do NOT include updateMemberLocation or addAlert in deps —
-  // Zustand actions are stable references but including them caused a secondary
-  // re-render path. members and myLocation are the only real triggers.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [members, myLocation, radiusMeters]);
+  }, [members, myLocation, radiusMeters, role, clockTick]);
 }

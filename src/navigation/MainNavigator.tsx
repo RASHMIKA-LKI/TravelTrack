@@ -10,10 +10,12 @@ import { SOSScreen } from '../screens/SOSScreen';
 import { ChatScreen } from '../screens/ChatScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { TripHistoryScreen } from '../screens/TripHistoryScreen';
+import { useReconnectionCoordinator } from '../hooks/useReconnectionCoordinator';
 
 const Stack = createNativeStackNavigator();
 
 export function MainNavigator() {
+  useReconnectionCoordinator();
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="Home" component={HomeScreen} />

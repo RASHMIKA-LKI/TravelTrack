@@ -1,6 +1,8 @@
 // src/services/locationService.ts
 import Geolocation from 'react-native-geolocation-service';
 import { PermissionsAndroid } from 'react-native';
+import { LOCATION_SYNC_INTERVAL_MS, LOCATION_FASTEST_INTERVAL_MS } from '../utils/constants';
+import { startForegroundTracking, stopForegroundTracking } from './foregroundTrackingService';
 
 interface LocationData {
   latitude: number;
@@ -29,12 +31,24 @@ class LocationService {
     return result === PermissionsAndroid.RESULTS.GRANTED;
   }
 
-  /** Start tracking GPS — updates every 3 seconds */
+  /** Start tracking GPS — updates every 5 seconds */
   async startTracking(): Promise<void> {
+    if (this.watchId !== null) return;
     const hasPermission = await this.requestPermission();
     if (!hasPermission) {
-      console.error('❌ Location permission denied!');
-      return;
+      throw new Error('Location permission was denied. Tracking did not start.');
+    }
+
+    await startForegroundTracking();
+
+    // Fetch immediate single GPS fix so myLocation is available instantly
+    try {
+      const immediate = await this.getCurrentLocation();
+      if (this.onLocationUpdate) {
+        this.onLocationUpdate(immediate);
+      }
+    } catch (e) {
+      console.warn('Initial location fix pending:', e);
     }
 
     this.watchId = Geolocation.watchPosition(
@@ -58,11 +72,11 @@ class LocationService {
         console.error('GPS Error:', error);
       },
       {
-        enableHighAccuracy: true,    // Use GPS chip, not just cell towers
-        distanceFilter: 1,           // Update every 1 meter of movement
-        interval: 3000,              // Check every 3 seconds
-        fastestInterval: 2000,       // Never faster than every 2 seconds
-        forceRequestLocation: true,  // Get a location even if phone hasn't moved
+        enableHighAccuracy: true,          // Use GPS chip, not just cell towers
+        distanceFilter: 1,                 // Update every 1 meter of movement
+        interval: LOCATION_SYNC_INTERVAL_MS,       // Check every 5 seconds
+        fastestInterval: LOCATION_FASTEST_INTERVAL_MS, // Never faster than every 3 seconds
+        forceRequestLocation: true,        // Get a location even if phone hasn't moved
       }
     );
     
@@ -76,6 +90,7 @@ class LocationService {
       this.watchId = null;
       console.log('GPS tracking stopped.');
     }
+    void stopForegroundTracking().catch((error) => console.warn('Could not stop foreground tracking service:', error));
   }
 
   /** Get ONE location reading right now */

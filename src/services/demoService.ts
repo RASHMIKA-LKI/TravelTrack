@@ -78,6 +78,8 @@ let chatTimer: ReturnType<typeof setInterval>   | null = null;
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+let demoHeading = 0;
+
 /**
  * Bootstrap the demo session.
  * Injects demo members into the store and starts movement + chat timers.
@@ -85,30 +87,36 @@ let chatTimer: ReturnType<typeof setInterval>   | null = null;
 export function startDemo(): void {
   const store = useTrackingStore.getState();
 
-  // Set up group
-  store.setRole('leader');
-  store.setRadius(50);
-  store.setGroup({
-    id: 'demo-group',
-    name: '🗺️ Demo Trip — Kandy',
-    leaderId: 'leader-me',
-    radiusMeters: 50,
-    createdAt: Date.now(),
-  });
+  // Set up group if not already set
+  if (!store.group) {
+    store.setRole('leader');
+    store.setGroup({
+      id: 'demo-group',
+      name: '🗺️ Demo Trip — Kandy',
+      leaderId: 'leader-me',
+      radiusMeters: 50,
+      createdAt: Date.now(),
+      sessionId: 'demo-session',
+      joinToken: 'demo-token',
+    });
+  }
 
-  // Set leader's own location
-  store.setMyLocation({
-    latitude: BASE_LAT,
-    longitude: BASE_LNG,
-    accuracy: 5,
-    speed: 0,
-    bearing: 0,
-    timestamp: Date.now(),
-  });
+  // Set initial location for current device if missing
+  if (!store.myLocation) {
+    store.setMyLocation({
+      latitude: BASE_LAT,
+      longitude: BASE_LNG,
+      accuracy: 5,
+      speed: 1.2,
+      bearing: 45,
+      timestamp: Date.now(),
+    });
+  }
 
   // Add demo members
   DEMO_MEMBERS.forEach((m) => {
     const pos = memberPositions[m.id];
+    const now = Date.now();
     store.addMember({
       id: m.id,
       name: m.name,
@@ -116,7 +124,11 @@ export function startDemo(): void {
       longitude: pos.lng,
       batteryLevel: m.battery,
       status: 'safe',
-      lastSeen: Date.now(),
+      lastSeen: now,
+      lastPacketReceivedAt: now,
+      lastLocationReceivedAt: now,
+      sourceFixReceivedAt: now,
+      connectionState: 'connected',
     });
   });
 
@@ -139,21 +151,53 @@ export function startDemo(): void {
   store.addMessage({ senderId: 'demo-1', senderName: 'Kasun Perera',   text: 'Hey! Can everyone hear me? 👋' });
   store.addMessage({ senderId: 'demo-2', senderName: 'Nimasha Silva',  text: 'Yes! Connected. This app is so cool 😍' });
 
-  // Move member positions every 2 seconds
+  // Move member positions and drift compass heading every 2 seconds
   locationTimer = setInterval(() => {
-    const { addMember, updateMemberLocation, radiusMeters, myLocation } = useTrackingStore.getState();
+    const { updateMemberLocation, radiusMeters, myLocation, setMyLocation } = useTrackingStore.getState();
+    const { calculateBearing } = require('../utils/geofence');
+
+    // Slowly drift demo device heading (simulating walking/rotation)
+    demoHeading = (demoHeading + 3) % 360;
+    if (myLocation) {
+      setMyLocation({
+        ...myLocation,
+        bearing: demoHeading,
+        timestamp: Date.now(),
+      });
+    }
+
     DEMO_MEMBERS.forEach((m) => {
       const { lat, lng } = stepPosition(m.id);
-      const dist = myLocation
+      const gpsDist = myLocation
         ? haversine(myLocation.latitude, myLocation.longitude, lat, lng)
         : 0;
-      const status = dist > radiusMeters ? 'out_of_range' : 'safe';
-      updateMemberLocation(m.id, {
+
+      const bearingDegrees = myLocation
+        ? calculateBearing(myLocation.latitude, myLocation.longitude, lat, lng)
+        : 0;
+
+      const status = gpsDist > radiusMeters ? 'out_of_range' : 'safe';
+
+      const updateData: any = {
         latitude: lat,
         longitude: lng,
         lastSeen: Date.now(),
         status,
-      });
+        accuracy: 8,
+        bearingDegrees,
+        lastPacketReceivedAt: Date.now(),
+        lastLocationReceivedAt: Date.now(),
+        sourceFixReceivedAt: Date.now(),
+        connectionState: 'connected',
+      };
+
+      if (status === 'out_of_range') {
+        updateData.lastKnownLatitude = lat;
+        updateData.lastKnownLongitude = lng;
+        updateData.lastKnownTimestamp = Date.now();
+      }
+
+      updateMemberLocation(m.id, updateData);
     });
   }, 2000);
 

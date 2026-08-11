@@ -1,25 +1,25 @@
 // src/screens/GroupLobbyScreen.tsx
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import {
   View,
   Text,
   TouchableOpacity,
   StyleSheet,
   FlatList,
-  SafeAreaView,
   StatusBar,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../theme/colors';
 import { useTrackingStore } from '../store/useTrackingStore';
 import { tcpSocketManager } from '../services/tcpSocketManager';
+import { wifiDirectManager } from '../services/wifiDirectManager';
 import { isDemoMode } from '../utils/isDemoMode';
-import { Platform } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
-import * as Device from 'expo-device';
+import { createGroupInvitation, encodeGroupInvitation } from '../utils/sessionProtocol';
 
 const DEMO = isDemoMode();
-const DEVICE_NAME = Device.deviceName || (Platform.OS === 'android' ? Platform.constants.Model : 'iPhone');
 
 export function GroupLobbyScreen({ navigation, route }: any) {
   const { groupName, isLeader } = route.params || {};
@@ -29,37 +29,46 @@ export function GroupLobbyScreen({ navigation, route }: any) {
   const setIsTracking = useTrackingStore((state) => state.setIsTracking);
   const resetTracking = useTrackingStore((state) => state.resetTracking);
   const role = useTrackingStore((state) => state.role);
+  const myDeviceId = useTrackingStore((state) => state.myDeviceId);
+  const group = useTrackingStore((state) => state.group);
+  const leavingRef = useRef(false);
 
-  // Fallback demo members if store is empty (to see visual styling)
-  const fallbackMembers = [
-    { id: 'me', name: isLeader ? 'You (Leader)' : 'You', status: 'safe', batteryLevel: 94, isMe: true },
-    { id: '2', name: 'Sarah Mendis', status: 'safe', batteryLevel: 88, isMe: false },
-    { id: '3', name: 'Mike Perera', status: 'safe', batteryLevel: 72, isMe: false },
-  ];
-
-  const displayMembers = (storeMembers.length > 0 || role !== null) ? storeMembers.map(m => ({
+  const localMember = {
+    id: myDeviceId,
+    name: isLeader ? 'You • Leader' : 'You',
+    status: 'safe' as const,
+    isMe: true,
+  };
+  const displayMembers = [
+    localMember,
+    ...storeMembers.filter((m) => m.id !== myDeviceId).map(m => ({
     id: m.id,
     name: m.name,
     status: m.status,
-    batteryLevel: m.batteryLevel,
-    isMe: m.id === 'me'
-  })) : fallbackMembers;
+    isMe: false,
+  })),
+  ];
 
   // Watch for tracking state change (members navigate automatically when leader triggers start)
   useEffect(() => {
     if (!isLeader && isTracking) {
+      leavingRef.current = true;
       navigation.replace('Tracking');
     }
   }, [isTracking, isLeader]);
 
   const handleStartTracking = () => {
+    leavingRef.current = true;
     if (setIsTracking) {
       setIsTracking(true);
     }
 
     // ✅ BUG FIX: Broadcast START_TRACKING to all connected members so they navigate too
     try {
-      tcpSocketManager.broadcast({ type: 'START_TRACKING', timestamp: Date.now() });
+      if (group) tcpSocketManager.broadcast({
+        type: 'START_TRACKING', groupId: group.id, sessionId: group.sessionId,
+        joinToken: group.joinToken, timestamp: Date.now(),
+      });
     } catch (e) {
       console.warn('Failed to broadcast START_TRACKING:', e);
     }
@@ -68,12 +77,35 @@ export function GroupLobbyScreen({ navigation, route }: any) {
     navigation.replace('Tracking');
   };
 
-  const handleLeaveLobby = () => {
+  const handleLeaveLobby = async () => {
+    leavingRef.current = true;
+    try {
+      if (isLeader) {
+        if (group) tcpSocketManager.broadcast({
+          type: 'END_GROUP', groupId: group.id, sessionId: group.sessionId,
+          joinToken: group.joinToken, timestamp: Date.now(),
+        });
+      }
+      tcpSocketManager.disconnect();
+      tcpSocketManager.stopServer();
+      await wifiDirectManager.leaveGroup();
+    } catch (error) {
+      console.warn('Could not fully close group lobby:', error);
+    }
     if (resetTracking) {
       resetTracking();
     }
     navigation.replace('Home');
   };
+
+  useEffect(() => navigation.addListener('beforeRemove', (event: any) => {
+    if (leavingRef.current) return;
+    event.preventDefault();
+    Alert.alert('Leave group lobby?', 'Leaving without cleanup can leave a ghost member on other devices.', [
+      { text: 'Stay', style: 'cancel' },
+      { text: 'Leave safely', style: 'destructive', onPress: () => void handleLeaveLobby() },
+    ]);
+  }), [navigation, isLeader, group]);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -83,10 +115,10 @@ export function GroupLobbyScreen({ navigation, route }: any) {
           <TouchableOpacity onPress={handleLeaveLobby} style={styles.leaveBtn}>
             <Text style={styles.leaveText}>Cancel</Text>
           </TouchableOpacity>
-          <Text style={styles.headerTitle} numberOfLines={1}>
+          <Text style={styles.headerTitle} numberOfLines={1} ellipsizeMode="tail">
             {groupName || 'Group Lobby'}
           </Text>
-          <View style={{ width: 60 }} />
+          <View style={styles.headerSpacer} />
         </View>
 
         {/* Demo Mode Banner */}
@@ -114,24 +146,24 @@ export function GroupLobbyScreen({ navigation, route }: any) {
         {isLeader && (
           <View style={styles.qrCard}>
             <Text style={styles.qrTitle}>Invite Members via QR Code</Text>
-            <Text style={styles.qrSubtitle}>Ask others to scan this code on their Scan screen to connect instantly</Text>
+            <Text style={styles.qrSubtitle}>Ask others to scan this code, then select this nearby host to connect.</Text>
             <View style={styles.qrContainer}>
               <QRCode
-                value={DEMO ? 'DEMO_PEER' : DEVICE_NAME}
+                value={DEMO ? 'DEMO_PEER' : group ? encodeGroupInvitation(createGroupInvitation(group)) : 'traveltrack:invalid'}
                 size={130}
                 color="#0A4A6D"
                 backgroundColor="#ffffff"
               />
             </View>
             <Text style={styles.qrInstructions}>
-              P2P Host Name contains: <Text style={{ fontWeight: 'bold' }}>{DEVICE_NAME}</Text>
+              QR confirms this invitation. Wi-Fi Direct chooses the nearby host.
             </Text>
           </View>
         )}
 
         <View style={styles.membersSection}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Connected Members</Text>
+            <Text style={styles.sectionTitle}>Group Members</Text>
             <Text style={styles.countBadge}>{displayMembers.length}</Text>
           </View>
 
@@ -147,13 +179,13 @@ export function GroupLobbyScreen({ navigation, route }: any) {
                 </View>
                 <View style={styles.memberInfo}>
                   <Text style={styles.memberName}>
-                    {item.name} {item.isMe ? ' (You)' : ''}
+                    {item.name}
                   </Text>
-                  <Text style={styles.memberMeta}>🔋 Battery: {item.batteryLevel}%</Text>
+                  <Text style={styles.memberMeta}>{item.isMe ? 'This device' : item.status === 'disconnected' ? 'Connection lost; last position retained' : 'Connected through Wi-Fi Direct'}</Text>
                 </View>
                 <View style={styles.statusBadge}>
                   <View style={styles.statusDot} />
-                  <Text style={styles.statusText}>Ready</Text>
+                  <Text style={styles.statusText}>{item.status === 'disconnected' ? 'Offline' : 'Ready'}</Text>
                 </View>
               </View>
             )}
@@ -196,6 +228,7 @@ const styles = StyleSheet.create({
   },
   leaveBtn: {
     paddingVertical: 8,
+    width: 76,
   },
   leaveText: {
     color: '#EF4444',
@@ -208,6 +241,11 @@ const styles = StyleSheet.create({
     color: '#1E293B',
     flex: 1,
     textAlign: 'center',
+    minWidth: 0,
+    paddingHorizontal: 8,
+  },
+  headerSpacer: {
+    width: 76,
   },
   banner: {
     flexDirection: 'row',

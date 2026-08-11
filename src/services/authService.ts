@@ -44,9 +44,8 @@ function getAuthErrorMessage(error: unknown): string {
       case 'auth/network-request-failed':
         return 'No internet connection. Check your Wi-Fi or mobile data.';
       case 'auth/admin-restricted-operation':
-        return 'This Firebase auth method is disabled in the project. Enable Email/Password and Anonymous sign-in in the Firebase Console.';
       case 'auth/operation-not-allowed':
-        return 'This sign-in method is not enabled. Contact support.';
+        return 'This Firebase auth method is disabled in the project. Enable Email/Password and Anonymous sign-in in the Firebase Console.';
       case 'auth/requires-recent-login':
         return 'This action requires a recent login. Please sign out and sign back in.';
       case 'auth/user-token-expired':

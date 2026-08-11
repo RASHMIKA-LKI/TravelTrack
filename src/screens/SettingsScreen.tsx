@@ -1,23 +1,26 @@
-// src/screens/SettingsScreen.tsx
-import React from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  SafeAreaView,
   Switch,
   TouchableOpacity,
   ScrollView,
   StatusBar,
   Alert,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../theme/colors';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useAuthStore } from '../store/useAuthStore';
+import { SyncAccountModal } from '../components/SyncAccountModal';
 
 export function SettingsScreen({ navigation }: any) {
   const settings = useSettingsStore();
-  const { logout } = useAuthStore();
+  const { user, logout } = useAuthStore();
+  const [syncModalVisible, setSyncModalVisible] = useState(false);
+
+  const isGuest = user?.isAnonymous ?? false;
 
   // Local/Store fallbacks in case Member 5's store hasn't been loaded on current branch
   const soundEnabled = settings?.soundEnabled ?? true;
@@ -27,14 +30,17 @@ export function SettingsScreen({ navigation }: any) {
 
   const toggleSound = settings?.toggleSound ?? (() => {});
   const toggleVibration = settings?.toggleVibration ?? (() => {});
-  const setGpsInterval = settings?.setGpsInterval ?? (() => {});
-  const setDefaultRadius = settings?.setDefaultRadius ?? (() => {});
 
   const handleLogout = () => {
-    Alert.alert('Confirm Logout', 'Are you sure you want to log out of TravelTrack?', [
+    const title = isGuest ? 'Exit Guest Mode' : 'Confirm Logout';
+    const message = isGuest
+      ? 'Are you sure you want to exit guest mode? Connect an email account first if you want to keep access to trip history saved under this guest account.'
+      : 'Are you sure you want to log out of TravelTrack?';
+
+    Alert.alert(title, message, [
       { text: 'Cancel', style: 'cancel' },
       {
-        text: 'Log Out',
+        text: isGuest ? 'Exit Guest Mode' : 'Log Out',
         style: 'destructive',
         onPress: () => {
           if (logout) {
@@ -64,11 +70,12 @@ export function SettingsScreen({ navigation }: any) {
             <View style={styles.settingRow}>
               <View style={styles.settingInfo}>
                 <Text style={styles.settingLabel}>Sound Alerts</Text>
-                <Text style={styles.settingDesc}>Play warning siren and safety return sounds</Text>
+                <Text style={styles.settingDesc}>Not available in this build; alerts use on-screen messages and optional vibration</Text>
               </View>
               <Switch
                 value={soundEnabled}
                 onValueChange={toggleSound}
+                disabled
                 trackColor={{ false: '#D0D0D0', true: colors.primaryLight }}
                 thumbColor={soundEnabled ? colors.primary : '#F4F3F4'}
               />
@@ -90,57 +97,62 @@ export function SettingsScreen({ navigation }: any) {
             </View>
           </View>
 
-          <Text style={styles.sectionTitle}>GPS Configuration</Text>
+          <Text style={styles.sectionTitle}>GPS & Geofence Configuration</Text>
           <View style={styles.card}>
-            <Text style={styles.settingLabel}>Location Sync Frequency</Text>
-            <Text style={styles.settingDesc}>Frequency at which device GPS uploads coordinates</Text>
-            
-            <View style={styles.btnRow}>
-              {[2000, 3000, 5000, 10000].map((interval) => {
-                const active = gpsIntervalMs === interval;
-                return (
-                  <TouchableOpacity
-                    key={interval}
-                    style={[styles.optionBtn, active ? styles.optionBtnActive : null]}
-                    onPress={() => setGpsInterval(interval)}
-                  >
-                    <Text style={[styles.optionBtnText, active ? styles.optionBtnTextActive : null]}>
-                      {interval / 1000}s
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
+            <View style={styles.settingRow}>
+              <View style={styles.settingInfo}>
+                <Text style={styles.settingLabel}>High-Precision Location Sync</Text>
+                <Text style={styles.settingDesc}>GPS polling and P2P heartbeat fixed at 5.0 seconds</Text>
+              </View>
+              <Text style={{ fontWeight: '700', color: colors.primary, fontSize: 16 }}>5s</Text>
             </View>
-          </View>
 
-          <Text style={styles.sectionTitle}>Geofence Configuration</Text>
-          <View style={styles.card}>
-            <Text style={styles.settingLabel}>Default Safe Radius</Text>
-            <Text style={styles.settingDesc}>Initial safe boundary radius applied when hosting trips</Text>
-            
-            <View style={styles.btnRow}>
-              {[25, 50, 75, 100].map((r) => {
-                const active = defaultRadiusMeters === r;
-                return (
-                  <TouchableOpacity
-                    key={r}
-                    style={[styles.optionBtn, active ? styles.optionBtnActive : null]}
-                    onPress={() => setDefaultRadius(r)}
-                  >
-                    <Text style={[styles.optionBtnText, active ? styles.optionBtnTextActive : null]}>
-                      {r}m
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
+            <View style={styles.divider} />
+
+            <View style={styles.settingRow}>
+              <View style={styles.settingInfo}>
+                <Text style={styles.settingLabel}>Group Safe Boundary Radius</Text>
+                <Text style={styles.settingDesc}>Geofence alert threshold fixed at 50 meters</Text>
+              </View>
+              <Text style={{ fontWeight: '700', color: colors.primary, fontSize: 16 }}>50m</Text>
             </View>
           </View>
 
           <Text style={styles.sectionTitle}>Account</Text>
-          <TouchableOpacity style={styles.logoutCard} onPress={handleLogout} activeOpacity={0.8}>
-            <Text style={styles.logoutText}>Log Out Account</Text>
-            <Text style={styles.logoutIcon}>🚪</Text>
-          </TouchableOpacity>
+          {isGuest ? (
+            <View style={styles.guestAccountCard}>
+              <View style={styles.guestCardHeader}>
+                <Text style={styles.guestBadge}>GUEST MODE</Text>
+                <Text style={styles.guestUnsynced}>Not connected</Text>
+              </View>
+              <Text style={styles.guestCardTitle}>Connect an Email Account</Text>
+              <Text style={styles.guestCardDesc}>
+                Convert this guest account to email/password while retaining the same account identity and any trip history already saved to it.
+              </Text>
+              <TouchableOpacity style={styles.syncAccountBtn} onPress={() => setSyncModalVisible(true)} activeOpacity={0.8}>
+                <Text style={styles.syncAccountBtnText}>☁️ Connect Account</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.exitGuestBtn} onPress={handleLogout} activeOpacity={0.7}>
+                <Text style={styles.exitGuestText}>Exit Guest Mode</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={styles.accountInfoCard}>
+              <View style={styles.accountInfoHeader}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.accountName}>{user?.displayName || 'Traveler'}</Text>
+                  <Text style={styles.accountEmail}>{user?.email || 'Synced Account'}</Text>
+                </View>
+                <View style={styles.syncedBadge}>
+                  <Text style={styles.syncedBadgeText}>Synced ✅</Text>
+                </View>
+              </View>
+              <TouchableOpacity style={styles.logoutCard} onPress={handleLogout} activeOpacity={0.8}>
+                <Text style={styles.logoutText}>Log Out Account</Text>
+                <Text style={styles.logoutIcon}>🚪</Text>
+              </TouchableOpacity>
+            </View>
+          )}
 
           <View style={styles.footer}>
             <Text style={styles.footerText}>TravelTrack — Version 1.0.0 (Beta)</Text>
@@ -148,6 +160,7 @@ export function SettingsScreen({ navigation }: any) {
           </View>
         </ScrollView>
       </View>
+      <SyncAccountModal visible={syncModalVisible} onClose={() => setSyncModalVisible(false)} />
     </SafeAreaView>
   );
 }
@@ -274,6 +287,110 @@ const styles = StyleSheet.create({
   },
   logoutIcon: {
     fontSize: 18,
+  },
+  guestAccountCard: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 16,
+    padding: 18,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    marginBottom: 16,
+  },
+  guestCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  guestBadge: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#0A4A6D',
+    letterSpacing: 1,
+    backgroundColor: 'rgba(10, 74, 109, 0.1)',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+  },
+  guestUnsynced: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#D97706',
+  },
+  guestCardTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#0F172A',
+    marginBottom: 6,
+  },
+  guestCardDesc: {
+    fontSize: 13,
+    color: '#64748B',
+    lineHeight: 18,
+    marginBottom: 16,
+  },
+  syncAccountBtn: {
+    backgroundColor: '#0A4A6D',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    shadowColor: '#0A4A6D',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.18,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  syncAccountBtnText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  exitGuestBtn: {
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginTop: 6,
+  },
+  exitGuestText: {
+    color: '#EF4444',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  accountInfoCard: {
+    marginBottom: 12,
+  },
+  accountInfoHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    marginBottom: 8,
+  },
+  accountName: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#0F172A',
+    marginBottom: 2,
+  },
+  accountEmail: {
+    fontSize: 13,
+    color: '#64748B',
+  },
+  syncedBadge: {
+    backgroundColor: '#DCFCE7',
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#86EFAC',
+  },
+  syncedBadgeText: {
+    color: '#15803D',
+    fontSize: 12,
+    fontWeight: '700',
   },
   footer: {
     alignItems: 'center',

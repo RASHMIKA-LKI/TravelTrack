@@ -7,11 +7,11 @@ import {
   TouchableOpacity,
   FlatList,
   StyleSheet,
-  SafeAreaView,
   KeyboardAvoidingView,
   Platform,
   StatusBar,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../theme/colors';
 import { useTrackingStore } from '../store/useTrackingStore';
 import { tcpSocketManager } from '../services/tcpSocketManager';
@@ -22,30 +22,16 @@ export function ChatScreen({ navigation }: any) {
   const addMessage = useTrackingStore((state) => state.addMessage);
   const role = useTrackingStore((state) => state.role);
   const myDeviceId = useTrackingStore((state) => state.myDeviceId);
+  const group = useTrackingStore((state) => state.group);
   const flatListRef = useRef<FlatList>(null);
 
-  // Fallback/Demo messages if list is empty
-  const fallbackMessages = [
-    { id: '1', senderId: '2', senderName: 'Sarah Mendis', text: 'Everyone ready to head out?', timestamp: Date.now() - 1000 * 60 * 5 },
-    { id: '2', senderId: 'me', senderName: 'You', text: 'Yes! On my way to the meeting point.', timestamp: Date.now() - 1000 * 60 * 3 },
-    { id: '3', senderId: '3', senderName: 'Mike Perera', text: "I'm at the entrance already", timestamp: Date.now() - 1000 * 60 * 1 },
-  ];
-
-  const displayMessages = messages.length > 0
-    ? messages.map(msg => ({
-        id: msg.id,
-        senderName: msg.senderName,
-        text: msg.text,
-        time: new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        mine: msg.senderId === myDeviceId,
-      }))
-    : fallbackMessages.map(msg => ({
-        id: msg.id,
-        senderName: msg.senderName,
-        text: msg.text,
-        time: new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        mine: msg.senderId === 'me',
-      }));
+  const displayMessages = messages.map(msg => ({
+    id: msg.id,
+    senderName: msg.senderName,
+    text: msg.text,
+    time: new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    mine: msg.senderId === myDeviceId,
+  }));
 
   const handleSend = () => {
     if (!inputText.trim()) return;
@@ -63,8 +49,12 @@ export function ChatScreen({ navigation }: any) {
     // Attempt peer-to-peer transmission
     try {
       if (tcpSocketManager) {
+        if (!group) return;
         const payloadData = {
           type: 'CHAT',
+          groupId: group.id,
+          sessionId: group.sessionId,
+          joinToken: group.joinToken,
           memberId: myDeviceId,
           memberName: 'You',
           message: inputText,
@@ -117,6 +107,11 @@ export function ChatScreen({ navigation }: any) {
           style={styles.messageList}
           contentContainerStyle={styles.listContent}
           onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+          ListEmptyComponent={
+            <View style={{ flex: 1, paddingVertical: 40, alignItems: 'center', justifyContent: 'center' }}>
+              <Text style={{ fontSize: 14, color: '#94A3B8' }}>💬 No messages in group chat yet.</Text>
+            </View>
+          }
           renderItem={({ item }) => (
             <View style={[styles.messageBubbleContainer, item.mine ? styles.mineContainer : styles.theirsContainer]}>
               {!item.mine && <Text style={styles.senderLabel}>{item.senderName}</Text>}

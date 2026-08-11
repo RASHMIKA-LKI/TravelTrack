@@ -18,6 +18,7 @@ export async function requestAllPermissions(): Promise<boolean> {
     const apiLevel = typeof Platform.Version === 'number' ? Platform.Version : parseInt(Platform.Version, 10);
     if (apiLevel >= 33) {
       permissions.push(PermissionsAndroid.PERMISSIONS.NEARBY_WIFI_DEVICES);
+      permissions.push(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
     }
 
     const results = await PermissionsAndroid.requestMultiple(permissions);

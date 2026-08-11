@@ -3,11 +3,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // ARCHITECTURE
 // ─────────────────────────────────────────────────────────────────────────────
-// We do NOT use createGroup() (Autonomous GO mode).
-// Instead we use standard Wi-Fi Direct peer negotiation:
-//   LEADER → startDiscoveringPeers() (becomes visible)
-//   MEMBER → startDiscoveringPeers() → finds leader → connect()
-//   Android negotiates Group Owner. GO IP is always 192.168.49.1.
+// The leader explicitly creates the Wi-Fi Direct group.  That gives clients a
+// predictable Group Owner and avoids the fragile race where two phones both
+// try to negotiate ownership while discovery is still running.
 //
 // EXPO GO SAFETY
 // ─────────────────────────────────────────────────────────────────────────────
@@ -41,7 +39,7 @@ function p2pCall(name: string, ...args: any[]): Promise<any> {
   const rawMod = getP2P();
   const mod = rawMod.default || rawMod;
   if (typeof mod[name] === 'function') return mod[name](...args);
-  return Promise.resolve();
+  return Promise.reject(new Error(`Wi-Fi Direct function "${name}" is unavailable in this build.`));
 }
 
 // ── Runtime permissions ────────────────────────────────────────────────────
@@ -98,29 +96,52 @@ class WifiDirectManager {
       await p2pCall('initialize');
       this.isInitialized = true;
       console.log('✅ Wi-Fi Direct native initialization complete.');
-    } catch (e) {
-      console.warn('Native P2P initialization warning (non-fatal):', e);
+    } catch (e: any) {
+      // The Android module is a process singleton. A JS fast-refresh can lose
+      // this flag while the already-initialised native manager remains valid.
+      if (String(e?.message || e).includes('only be initialized once')) {
+        this.isInitialized = true;
+        return;
+      }
+      console.warn('Native P2P initialization failed:', e);
+      throw new Error('Wi-Fi Direct could not be initialized. Restart the app and try again.');
     }
   }
 
-  private async resetFramework(): Promise<void> {
+  /** Stop the current operation without re-initialising the native singleton. */
+  private async resetFramework(removeGroup = true): Promise<void> {
     this.peersSubscription = this.removeSub(this.peersSubscription);
     this.connectionSubscription = this.removeSub(this.connectionSubscription);
+    if (this.scanInterval) {
+      clearInterval(this.scanInterval);
+      this.scanInterval = null;
+    }
     
     // Only call cancel/stop if the native manager was actually initialized to prevent NullPointerException crashes
     if (this.isInitialized) {
       try { await p2pCall('cancelConnect'); } catch (_) {}
       try { await p2pCall('stopDiscoveringPeers'); } catch (_) {}
-      // ✅ BUG FIX: Always remove old group to prevent "Host Not Found" on reconnect.
-      // Without this, the previous Wi-Fi Direct group persists in Android's framework
-      // and createGroup() silently fails on the second attempt.
-      try { await p2pCall('removeGroup'); } catch (_) {}
-      // Wait for Android Wi-Fi Direct framework to fully release resources
-      await sleep(600);
-      // Reset initialized flag so ensureInitialized() re-runs cleanly next time.
-      this.isInitialized = false;
+      if (removeGroup) {
+        try { await p2pCall('removeGroup'); } catch (_) {}
+      }
+      // Android releases Wi-Fi Direct operations asynchronously.  Keep the
+      // existing native manager alive: the package rejects a second initialize().
+      await sleep(removeGroup ? 1000 : 350);
     }
-    console.log('🧹 Wi-Fi Direct reset (group removed).');
+    console.log('🧹 Wi-Fi Direct operations reset.');
+  }
+
+  private async waitForGroup(timeoutMs = 12_000): Promise<any> {
+    const startedAt = Date.now();
+    let lastInfo: any;
+    while (Date.now() - startedAt < timeoutMs) {
+      try {
+        lastInfo = await p2pCall('getConnectionInfo');
+        if (lastInfo?.groupFormed) return lastInfo;
+      } catch (_) {}
+      await sleep(500);
+    }
+    throw new Error('Wi-Fi Direct group was not ready. Turn Wi-Fi off and on, then try again.');
   }
 
   // ── LEADER ────────────────────────────────────────────────────────────────
@@ -135,39 +156,20 @@ class WifiDirectManager {
       );
     }
 
-    // Initialize first before calling any reset operations
     await this.ensureInitialized();
     await this.resetFramework();
-    await this.ensureInitialized();
-    await sleep(800);
 
     try {
-      // 1. Create P2P Group Owner mode on Leader
       await p2pCall('createGroup');
+      await this.waitForGroup();
       console.log('✅ Leader Wi-Fi Direct group created.');
     } catch (e: any) {
-      console.warn('createGroup note (may already exist or fallback):', e?.message);
-    }
-
-    try {
-      // 2. Make Leader discoverable over P2P
-      await p2pCall('startDiscoveringPeers');
-      console.log('✅ Leader is now discoverable via Wi-Fi Direct.');
-    } catch (e: any) {
-      console.warn('⚠️ startDiscoveringPeers BUSY on leader, retrying in 1.5s...', e?.message);
-      await sleep(1500);
-      try {
-        await p2pCall('startDiscoveringPeers');
-        console.log('✅ Leader is now discoverable via Wi-Fi Direct (retry).');
-      } catch (e2: any) {
-        console.warn('startDiscoveringPeers warning (non-fatal after retry):', e2?.message);
-      }
+      throw new Error(`Could not create the host group. ${e?.message || 'Please retry once Wi-Fi is ready.'}`);
     }
   }
 
   async stopHosting(): Promise<void> {
     if (isDemoMode()) return;
-    try { await p2pCall('removeGroup'); } catch (_) {}
     await this.resetFramework();
     console.log('Leader stopped hosting.');
   }
@@ -186,15 +188,18 @@ class WifiDirectManager {
 
     await this.ensureInitialized();
     await this.resetFramework();
-    await this.ensureInitialized();
-    await sleep(800);
 
     try {
       await p2pCall('startDiscoveringPeers');
     } catch (e: any) {
-      console.warn('⚠️ Wi-Fi Direct framework busy, retrying in 1s...', e?.message);
-      await sleep(1000);
-      try { await p2pCall('startDiscoveringPeers'); } catch (_) {}
+      // A short backoff is useful after Android tears down an old group, but
+      // never pretend discovery succeeded if the framework is still busy.
+      await sleep(1200);
+      try {
+        await p2pCall('startDiscoveringPeers');
+      } catch (retryError: any) {
+        throw new Error(`Wi-Fi Direct is busy. Wait a moment and scan again. ${retryError?.message || ''}`.trim());
+      }
     }
 
     const fetchPeers = async () => {
@@ -242,31 +247,72 @@ class WifiDirectManager {
   async connectToLeader(deviceAddress: string): Promise<string> {
     if (isDemoMode()) return LEADER_IP; // TCP stub handles the rest
 
+    // Keep Android's peer discovery active until the connection request has
+    // been accepted. Stopping it immediately before connect is a device-specific
+    // race that produces the exact "Operation failed due to an internal error"
+    // shown on Samsung/Android builds. We only stop our JS polling/listener here.
+    if (this.scanInterval) {
+      clearInterval(this.scanInterval);
+      this.scanInterval = null;
+    }
+    this.peersSubscription = this.removeSub(this.peersSubscription);
     this.connectionSubscription = this.removeSub(this.connectionSubscription);
-    await p2pCall('connect', deviceAddress);
-    console.log('🔄 Wi-Fi Direct connect() sent. Waiting for group to form...');
 
     return new Promise<string>((resolve, reject) => {
       let settled = false;
-      const cleanup = () => { this.connectionSubscription = this.removeSub(this.connectionSubscription); };
-
-      const p2pMod = getP2P();
-      const mod = p2pMod.default || p2pMod;
-      this.connectionSubscription = mod.subscribeOnConnectionInfoUpdates((info: any) => {
-        if (settled) return;
-        console.log('Connection info update:', JSON.stringify(info));
-        if (!info.groupFormed) return;
-
+      let pollTimer: ReturnType<typeof setInterval> | null = null;
+      let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
+      const cleanup = () => {
+        this.connectionSubscription = this.removeSub(this.connectionSubscription);
+        if (pollTimer) clearInterval(pollTimer);
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+      };
+      const acceptConnectionInfo = (info: any) => {
+        if (settled || !info?.groupFormed) return;
         settled = true;
         cleanup();
-
         const reportedIp = info.groupOwnerAddress?.hostAddress;
         const leaderIp = reportedIp && reportedIp !== '0.0.0.0' ? reportedIp : LEADER_IP;
         console.log(`✅ Wi-Fi Direct group formed! Leader IP: ${leaderIp}`);
         resolve(leaderIp);
+      };
+
+      const p2pMod = getP2P();
+      const mod = p2pMod.default || p2pMod;
+      this.connectionSubscription = mod.subscribeOnConnectionInfoUpdates((info: any) => {
+        console.log('Connection info update:', JSON.stringify(info));
+        acceptConnectionInfo(info);
       });
 
-      setTimeout(() => {
+      // Subscribe and poll before connect(): some devices publish the group
+      // state immediately, before a post-connect listener can be installed.
+      pollTimer = setInterval(async () => {
+        try { acceptConnectionInfo(await p2pCall('getConnectionInfo')); } catch (_) {}
+      }, 600);
+      const requestConnection = async () => {
+        try {
+          // Do not force group-owner intent: the selected leader has already
+          // created the group, and Android can join it using the normal API.
+          await p2pCall('connect', deviceAddress);
+        } catch (firstError) {
+          // Android sometimes keeps a previous cancelled request in-flight.
+          // Clear it once, wait for the framework, and retry this same peer.
+          try { await p2pCall('cancelConnect'); } catch (_) {}
+          await sleep(900);
+          await p2pCall('connect', deviceAddress);
+        }
+      };
+
+      void requestConnection()
+        .then(() => console.log('🔄 Wi-Fi Direct connect request sent. Waiting for group to form...'))
+        .catch((error: any) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          reject(new Error(`Could not start the Wi-Fi Direct connection. ${error?.message || ''}`.trim()));
+        });
+
+      timeoutTimer = setTimeout(() => {
         if (!settled) {
           settled = true;
           cleanup();
@@ -274,7 +320,7 @@ class WifiDirectManager {
             'Connection timed out (25s). Make sure both devices have Wi-Fi on and the leader tapped "Start Hosting Group".'
           ));
         }
-      }, 25000);
+      }, 25_000);
     });
   }
 

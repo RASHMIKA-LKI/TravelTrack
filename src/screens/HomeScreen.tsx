@@ -1,14 +1,20 @@
-// src/screens/HomeScreen.tsx
-import React, { useEffect } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView, StatusBar, ScrollView } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, StatusBar, ScrollView } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors } from '../theme/colors';
 import { useAuthStore } from '../store/useAuthStore';
 import { requestAllPermissions } from '../utils/permissions';
+import { SyncAccountModal } from '../components/SyncAccountModal';
+import { useTrackingStore } from '../store/useTrackingStore';
 
 export function HomeScreen({ navigation }: any) {
   const { user, logout } = useAuthStore();
-  const userName = user?.displayName || user?.email?.split('@')[0] || 'Traveler';
+  const [syncModalVisible, setSyncModalVisible] = useState(false);
+  const isGuest = user?.isAnonymous ?? false;
+  const userName = user?.displayName || user?.email?.split('@')[0] || (isGuest ? 'Guest' : 'Traveler');
+  const interruptedSession = useTrackingStore((state) => state.interruptedSession);
+  const setInterruptedSession = useTrackingStore((state) => state.setInterruptedSession);
 
   useEffect(() => {
     requestAllPermissions();
@@ -23,12 +29,30 @@ export function HomeScreen({ navigation }: any) {
             <Text style={styles.appTitle}>TravelTrack</Text>
             <Text style={styles.greeting}>Hello, {userName}! 👋</Text>
           </View>
-          <TouchableOpacity style={styles.logoutBtn} onPress={logout}>
-            <Text style={styles.logoutText}>Log Out</Text>
-          </TouchableOpacity>
+          {isGuest ? (
+            <TouchableOpacity style={styles.syncBtn} onPress={() => setSyncModalVisible(true)}>
+              <Text style={styles.syncText}>☁️ Connect Account</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity style={styles.logoutBtn} onPress={logout}>
+              <Text style={styles.logoutText}>Log Out</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         <Text style={styles.sub}>What would you like to do today?</Text>
+
+        {interruptedSession && (
+          <View style={styles.interruptedCard}>
+            <Text style={styles.interruptedTitle}>Previous trip was interrupted</Text>
+            <Text style={styles.interruptedText}>
+              {interruptedSession.group.name} stopped without a confirmed group shutdown. Saved alerts, messages, and last-known member positions were retained locally.
+            </Text>
+            <TouchableOpacity onPress={() => setInterruptedSession(null)}>
+              <Text style={styles.interruptedDismiss}>Dismiss notice</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         {/* Create Group Card */}
         <TouchableOpacity
@@ -112,11 +136,16 @@ export function HomeScreen({ navigation }: any) {
           </TouchableOpacity>
         </View>
       </ScrollView>
+      <SyncAccountModal visible={syncModalVisible} onClose={() => setSyncModalVisible(false)} />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  interruptedCard: { backgroundColor: '#FFF7ED', borderColor: '#FB923C', borderWidth: 1, borderRadius: 14, padding: 14, marginBottom: 18 },
+  interruptedTitle: { color: '#9A3412', fontWeight: '800', fontSize: 15, marginBottom: 5 },
+  interruptedText: { color: '#7C2D12', fontSize: 13, lineHeight: 19 },
+  interruptedDismiss: { color: '#0A4A6D', fontWeight: '700', marginTop: 10 },
   safe: {
     flex: 1,
     backgroundColor: '#F8F9FA',
@@ -144,6 +173,24 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#1E293B',
     marginTop: 4,
+  },
+  syncBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    backgroundColor: '#0A4A6D',
+    borderWidth: 1.5,
+    borderColor: '#0A4A6D',
+    shadowColor: '#0A4A6D',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  syncText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '700',
   },
   logoutBtn: {
     paddingVertical: 8,

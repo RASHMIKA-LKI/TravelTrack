@@ -5,16 +5,15 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
-  SafeAreaView,
   Alert,
   StatusBar,
   ScrollView,
   Animated,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../theme/colors';
 import { useTrackingStore } from '../store/useTrackingStore';
-import { alertManager } from '../services/alertManager';
-import { tcpSocketManager } from '../services/tcpSocketManager';
+import { sendSOS } from '../services/sosService';
 
 export function SOSScreen({ navigation }: any) {
   const triggerSOS = useTrackingStore((state) => state.triggerSOS);
@@ -41,41 +40,12 @@ export function SOSScreen({ navigation }: any) {
   }, []);
 
   const handleSOS = () => {
+    const result = sendSOS();
     Alert.alert(
-      '🆘 SOS Sent!',
-      'Your location has been shared with all group members. Help is on the way.',
+      result.sent ? 'SOS transmission started' : 'SOS not delivered',
+      result.message,
       [{ text: 'OK', onPress: () => navigation.goBack() }]
     );
-
-    // Call store triggers
-    if (triggerSOS) {
-      triggerSOS('You');
-    }
-
-    // Call alert manager triggers for audio/vibration loops
-    if (alertManager && alertManager.triggerSOSAlert) {
-      alertManager.triggerSOSAlert('You', myLocation?.latitude || 0, myLocation?.longitude || 0);
-    }
-
-    // ✅ BUG FIX: Send SOS over TCP to all other devices
-    try {
-      const sosPayload = {
-        type: 'SOS',
-        memberId: myDeviceId,
-        memberName: 'You',
-        latitude: myLocation?.latitude || 0,
-        longitude: myLocation?.longitude || 0,
-        message: 'SOS emergency alert!',
-        timestamp: Date.now(),
-      };
-      if (role === 'leader' && tcpSocketManager.broadcast) {
-        tcpSocketManager.broadcast(sosPayload);
-      } else if (role === 'member' && tcpSocketManager.send) {
-        tcpSocketManager.send(sosPayload);
-      }
-    } catch (e) {
-      console.warn('Failed to send SOS over TCP:', e);
-    }
   };
 
   return (
