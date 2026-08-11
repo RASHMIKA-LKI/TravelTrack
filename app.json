@@ -6,6 +6,9 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+    "plugins": [
+      "./plugins/withTravelTrackingService"
+    ],
     "ios": {
       "supportsTablet": true
     },
@@ -27,6 +30,7 @@
         "android.permission.NEARBY_WIFI_DEVICES",
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_LOCATION",
+        "android.permission.POST_NOTIFICATIONS",
         "android.permission.WAKE_LOCK"
       ]
     },

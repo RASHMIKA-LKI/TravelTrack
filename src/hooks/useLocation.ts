@@ -4,6 +4,8 @@ import { locationService } from '../services/locationService';
 import { useTrackingStore } from '../store/useTrackingStore';
 import { tcpSocketManager } from '../services/tcpSocketManager';
 import { useAuthStore } from '../store/useAuthStore';
+import { broadcastCurrentGroupState } from '../services/groupStateService';
+import { getLocalFixAgeMs } from '../utils/trackingFreshness';
 
 /**
  * Use this hook in any screen to access the current user's GPS location.
@@ -36,14 +38,17 @@ export function useLocation() {
   const sendLocationSync = useCallback(() => {
     const state = useTrackingStore.getState();
     const loc = state.myLocation;
-    if (!loc || state.connectionStatus !== 'connected') return;
+    const group = state.group;
+    if (!loc || !group || state.connectionStatus !== 'connected') return;
 
     if (role === 'member') {
       if (!tcpSocketManager.isClientConnected) return;
 
       const payload = {
         type: 'LOCATION',
-        groupId: state.group?.id || 'default-group',
+        groupId: group.id,
+        sessionId: group.sessionId,
+        joinToken: group.joinToken,
         memberId: myDeviceId,
         memberName: userName,
         latitude: loc.latitude,
@@ -51,30 +56,16 @@ export function useLocation() {
         accuracy: loc.accuracy,
         bearing: loc.bearing,
         speed: loc.speed,
+        sequence: state.nextLocationSequence(),
+        fixAgeMs: getLocalFixAgeMs(loc.timestamp),
         timestamp: Date.now(),
       };
       tcpSocketManager.send(payload);
     } else if (role === 'leader') {
       if (!tcpSocketManager.isServerRunning) return;
 
-      const payload = {
-        type: 'GROUP_STATE',
-        groupId: state.group?.id || 'default-group',
-        members: [
-          {
-            id: myDeviceId,
-            name: userName,
-            latitude: loc.latitude,
-            longitude: loc.longitude,
-            accuracy: loc.accuracy,
-            status: 'safe' as const,
-            lastSeen: Date.now(),
-            isLeader: true,
-          },
-          ...state.members,
-        ],
-      };
-      tcpSocketManager.broadcast(payload);
+      state.nextLocationSequence();
+      broadcastCurrentGroupState();
     }
   }, [role, myDeviceId, userName]);
 

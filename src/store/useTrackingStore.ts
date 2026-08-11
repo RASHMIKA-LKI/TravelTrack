@@ -1,44 +1,20 @@
 import { create } from 'zustand';
 import { Platform } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Member, Group } from '../types/models';
+import { Group, GroupInvitation, InterruptedSession, LocationData, Member, PeerConnectionState } from '../types/models';
 
-const DEVICE_ID_KEY = '@traveltrack_device_id';
-
-// Generate a fallback device ID per session while loading persistent ID from storage
+// Used only until AppNavigator finishes the single canonical identity migration.
 const FALLBACK_DEVICE_ID = `${Platform.OS}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-export async function getPersistentDeviceId(): Promise<string> {
-  try {
-    const stored = await AsyncStorage.getItem(DEVICE_ID_KEY);
-    if (stored) return stored;
-    const newId = `${Platform.OS}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    await AsyncStorage.setItem(DEVICE_ID_KEY, newId);
-    return newId;
-  } catch (e) {
-    return FALLBACK_DEVICE_ID;
-  }
-}
-
-interface LocationData {
-  latitude: number;
-  longitude: number;
-  accuracy: number;
-  speed: number;
-  bearing: number;
-  timestamp: number;
-}
-
-interface Alert {
+export interface TrackingAlert {
   id: string;
-  type: 'out_of_range' | 'sos' | 'returned' | 'meetup';
+  type: 'out_of_range' | 'sos' | 'returned' | 'meetup' | 'connection_lost' | 'gps_uncertain';
   memberName: string;
   message: string;
   timestamp: number;
   read: boolean;
 }
 
-interface MeetupPoint {
+export interface MeetupPoint {
   name: string;
   latitude: number;
   longitude: number;
@@ -46,7 +22,7 @@ interface MeetupPoint {
   timestamp: number;
 }
 
-interface ChatMessage {
+export interface ChatMessage {
   id: string;
   senderId: string;
   senderName: string;
@@ -54,8 +30,19 @@ interface ChatMessage {
   timestamp: number;
 }
 
-interface TrackingState {
+export interface PendingSOS {
+  eventId: string;
+  status: 'pending' | 'sent_to_leader' | 'delivered' | 'failed';
+  acknowledgedBy: string[];
+  createdAt: number;
+  failureReason?: string;
+  locationIncluded: boolean;
+}
+
+export interface TrackingState {
   myDeviceId: string;
+  identityReady: boolean;
+  persistenceReady: boolean;
   role: 'leader' | 'member' | null;
   group: Group | null;
   members: Member[];
@@ -63,33 +50,50 @@ interface TrackingState {
   isTracking: boolean;
   sosActive: boolean;
   sosTriggeredBy: string | null;
-  connectionStatus: 'disconnected' | 'scanning' | 'connecting' | 'connected' | 'reconnecting';
-  alerts: Alert[];
+  connectionStatus: 'disconnected' | 'scanning' | 'connecting' | 'connected' | 'degraded' | 'reconnecting';
+  alerts: TrackingAlert[];
   messages: ChatMessage[];
   radiusMeters: number;
   meetupPoint: MeetupPoint | null;
+  pendingInvitation: GroupInvitation | null;
+  interruptedSession: InterruptedSession | null;
+  pendingSOS: PendingSOS[];
+  locationSequence: number;
+  lastLeaderDeviceAddress: string | null;
+  lastLeaderIp: string | null;
 
-  setMyDeviceId: (deviceId: string) => void;
+  setIdentity: (deviceId: string) => void;
   setRole: (role: 'leader' | 'member') => void;
   setGroup: (group: Group) => void;
   setMyLocation: (location: LocationData) => void;
   updateMemberLocation: (memberId: string, locationData: Partial<Member>) => void;
   addMember: (member: Member) => void;
   removeMember: (memberId: string) => void;
+  markMemberConnection: (memberId: string, connectionState: PeerConnectionState) => void;
   setIsTracking: (value: boolean) => void;
   triggerSOS: (memberName: string) => void;
   clearSOS: () => void;
-  setConnectionStatus: (status: 'disconnected' | 'scanning' | 'connecting' | 'connected' | 'reconnecting') => void;
-  addAlert: (alert: Omit<Alert, 'id' | 'timestamp' | 'read'>) => void;
+  setConnectionStatus: (status: 'disconnected' | 'scanning' | 'connecting' | 'connected' | 'degraded' | 'reconnecting') => void;
+  addAlert: (alert: Omit<TrackingAlert, 'id' | 'timestamp' | 'read'>) => void;
   markAlertsRead: () => void;
   addMessage: (message: Omit<ChatMessage, 'id' | 'timestamp'>) => void;
   setRadius: (meters: number) => void;
   setMeetupPoint: (point: MeetupPoint) => void;
+  setPendingInvitation: (invitation: GroupInvitation | null) => void;
+  setLeaderConnection: (deviceAddress: string | null, leaderIp: string | null) => void;
+  nextLocationSequence: () => number;
+  addPendingSOS: (sos: PendingSOS) => void;
+  acknowledgeSOS: (eventId: string, recipientId: string) => void;
+  failSOS: (eventId: string, reason: string) => void;
+  setInterruptedSession: (session: InterruptedSession | null) => void;
+  hydratePersistedData: (data: Partial<Pick<TrackingState, 'alerts' | 'messages' | 'pendingSOS' | 'meetupPoint'>> & { interruptedSession?: InterruptedSession | null }) => void;
   resetTracking: () => void;
 }
 
 export const useTrackingStore = create<TrackingState>((set, get) => ({
   myDeviceId: FALLBACK_DEVICE_ID,
+  identityReady: false,
+  persistenceReady: false,
   role: null,
   group: null,
   members: [],
@@ -102,27 +106,20 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
   messages: [],
   radiusMeters: 50,
   meetupPoint: null,
+  pendingInvitation: null,
+  interruptedSession: null,
+  pendingSOS: [],
+  locationSequence: 0,
+  lastLeaderDeviceAddress: null,
+  lastLeaderIp: null,
 
-  setMyDeviceId: (myDeviceId) => set({ myDeviceId }),
+  setIdentity: (myDeviceId) => set({ myDeviceId, identityReady: true }),
   setRole: (role) => set({ role }),
-  setGroup: (group) => set({ group }),
+  setGroup: (group) => set({ group, interruptedSession: null }),
 
-  // ── Skip the update if coords haven't moved significantly ──────────────────
-  // GPS fires ~every second even when stationary. Without this guard every
-  // tick re-renders the entire tracking screen even when nothing changed.
-  setMyLocation: (location) => {
-    const prev = get().myLocation;
-    if (prev) {
-      const latDiff = Math.abs(prev.latitude - location.latitude);
-      const lngDiff = Math.abs(prev.longitude - location.longitude);
-      // Keep a low-rate heartbeat for stationary members.  The previous
-      // implementation dropped every stationary update, which made a nearby
-      // device look stale to the group even though its GPS was still active.
-      const elapsed = location.timestamp - prev.timestamp;
-      if (latDiff < 0.00001 && lngDiff < 0.00001 && elapsed < 5000) return;
-    }
-    set({ myLocation: location });
-  },
+  // Preserve every real provider fix. Transport heartbeats must never manufacture
+  // a fresh GPS timestamp from a cached coordinate.
+  setMyLocation: (location) => set({ myLocation: location }),
 
   // ── Only mutate the member that actually changed ───────────────────────────
   updateMemberLocation: (memberId, locationData) =>
@@ -131,10 +128,7 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
       if (!existing) return state; // Member not found → no change
 
       const now = Date.now();
-      const patch = {
-        ...locationData,
-        lastReceivedAt: locationData.lastReceivedAt ?? now,
-      };
+      const patch = { ...locationData };
 
       // Check if any field would actually change
       const hasChange = (Object.keys(patch) as (keyof Member)[]).some(
@@ -150,7 +144,7 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
         ? {
             lastKnownLatitude: patch.latitude,
             lastKnownLongitude: patch.longitude,
-            lastKnownTimestamp: patch.lastSeen ?? now,
+            lastKnownTimestamp: patch.sourceFixReceivedAt ?? patch.lastSeen ?? now,
           }
         : {};
 
@@ -176,7 +170,9 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
             lastKnownTimestamp: member.lastSeen ?? now,
           }
         : member),
-      lastReceivedAt: member.lastReceivedAt ?? now,
+      lastReceivedAt: member.lastReceivedAt ?? member.lastPacketReceivedAt ?? now,
+      lastPacketReceivedAt: member.lastPacketReceivedAt ?? member.lastReceivedAt ?? now,
+      connectionState: member.connectionState ?? 'connected',
     };
 
     set((state) => ({
@@ -187,6 +183,19 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
   removeMember: (memberId) =>
     set((state) => ({
       members: state.members.filter((m) => m.id !== memberId),
+    })),
+
+  markMemberConnection: (memberId, connectionState) =>
+    set((state) => ({
+      members: state.members.map((member) =>
+        member.id === memberId
+          ? {
+              ...member,
+              connectionState,
+              status: connectionState === 'disconnected' ? 'disconnected' : member.status,
+            }
+          : member
+      ),
     })),
 
   setIsTracking: (value) => set({ isTracking: value }),
@@ -203,7 +212,7 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
       alerts: [
         {
           ...alert,
-          id: Date.now().toString(),
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           timestamp: Date.now(),
           read: false,
         },
@@ -222,7 +231,7 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
         ...state.messages,
         {
           ...message,
-          id: Date.now().toString(),
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           timestamp: Date.now(),
         },
       ],
@@ -231,6 +240,53 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
   setRadius: (meters) => set({ radiusMeters: meters }),
 
   setMeetupPoint: (point) => set({ meetupPoint: point }),
+
+  setPendingInvitation: (pendingInvitation) => set({ pendingInvitation }),
+
+  setLeaderConnection: (lastLeaderDeviceAddress, lastLeaderIp) =>
+    set({ lastLeaderDeviceAddress, lastLeaderIp }),
+
+  nextLocationSequence: () => {
+    const next = get().locationSequence + 1;
+    set({ locationSequence: next });
+    return next;
+  },
+
+  addPendingSOS: (sos) =>
+    set((state) => ({
+      pendingSOS: [sos, ...state.pendingSOS.filter((existing) => existing.eventId !== sos.eventId)].slice(0, 50),
+    })),
+
+  acknowledgeSOS: (eventId, recipientId) =>
+    set((state) => ({
+      pendingSOS: state.pendingSOS.map((sos) =>
+        sos.eventId === eventId
+          ? {
+              ...sos,
+              status: 'delivered',
+              acknowledgedBy: Array.from(new Set([...sos.acknowledgedBy, recipientId])),
+            }
+          : sos
+      ),
+    })),
+
+  failSOS: (eventId, failureReason) =>
+    set((state) => ({
+      pendingSOS: state.pendingSOS.map((sos) =>
+        sos.eventId === eventId ? { ...sos, status: 'failed', failureReason } : sos
+      ),
+    })),
+
+  setInterruptedSession: (interruptedSession) => set({ interruptedSession }),
+
+  hydratePersistedData: (data) => set({
+    alerts: Array.isArray(data.alerts) ? data.alerts.slice(0, 500) : [],
+    messages: Array.isArray(data.messages) ? data.messages.slice(-500) : [],
+    pendingSOS: Array.isArray(data.pendingSOS) ? data.pendingSOS.slice(0, 50) : [],
+    meetupPoint: data.meetupPoint ?? null,
+    interruptedSession: data.interruptedSession ?? null,
+    persistenceReady: true,
+  }),
 
   resetTracking: () =>
     set({
@@ -245,11 +301,10 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
       alerts: [],
       messages: [],
       meetupPoint: null,
+      pendingInvitation: null,
+      pendingSOS: [],
+      locationSequence: 0,
+      lastLeaderDeviceAddress: null,
+      lastLeaderIp: null,
     }),
 }));
-
-// Load persistent device ID asynchronously on startup
-getPersistentDeviceId().then((id) => {
-  useTrackingStore.getState().setMyDeviceId(id);
-});
-

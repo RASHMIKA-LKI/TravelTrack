@@ -17,6 +17,7 @@ import { useWifiDirect } from '../hooks/useWifiDirect';
 import { isDemoMode } from '../utils/isDemoMode';
 import { startDemo } from '../services/demoService';
 import { SAFE_RADIUS_METERS } from '../utils/constants';
+import { createSessionValue } from '../utils/sessionProtocol';
 
 const DEMO = isDemoMode();
 
@@ -32,7 +33,8 @@ export function CreateGroupScreen({ navigation }: any) {
   const { startHosting } = useWifiDirect();
 
   const handleStart = async () => {
-    if (!groupName.trim()) {
+    const normalizedGroupName = groupName.trim().slice(0, 80);
+    if (!normalizedGroupName) {
       Alert.alert('Validation Error', 'Please enter a group name');
       return;
     }
@@ -44,31 +46,36 @@ export function CreateGroupScreen({ navigation }: any) {
       startDemo();
       setGroup({
         id: 'demo-group',
-        name: groupName || '🗺️ Demo Trip',
+        name: normalizedGroupName || '🗺️ Demo Trip',
         leaderId: myDeviceId,
         radiusMeters: radius,
         createdAt: Date.now(),
+        sessionId: 'demo-session',
+        joinToken: 'demo-token',
       });
       setLoading(false);
-      navigation.navigate('GroupLobby', { groupName: groupName || '🗺️ Demo Trip', isLeader: true });
+      navigation.navigate('GroupLobby', { groupName: normalizedGroupName || '🗺️ Demo Trip', isLeader: true });
       return;
     }
 
     try {
-      await startHosting();
-
+      const now = Date.now();
       setRole('leader');
       setGroup({
-        id: Date.now().toString(),
-        name: groupName,
+        id: createSessionValue('group'),
+        name: normalizedGroupName,
         leaderId: myDeviceId,
         radiusMeters: radius,
-        createdAt: Date.now(),
+        createdAt: now,
+        sessionId: createSessionValue('session'),
+        joinToken: createSessionValue('invite'),
       });
+      await startHosting();
       setIsTracking(true);
 
-      navigation.navigate('GroupLobby', { groupName, isLeader: true });
+      navigation.navigate('GroupLobby', { groupName: normalizedGroupName, isLeader: true });
     } catch (error: any) {
+      useTrackingStore.getState().resetTracking();
       const msg: string = error?.message || 'Unknown error';
       Alert.alert(
         'Wi-Fi Direct Error',
@@ -108,6 +115,7 @@ export function CreateGroupScreen({ navigation }: any) {
           <TextInput
             style={styles.input}
             placeholder="e.g. Knuckles Expedition 2026"
+            maxLength={80}
             value={groupName}
             onChangeText={setGroupName}
             placeholderTextColor="#999"

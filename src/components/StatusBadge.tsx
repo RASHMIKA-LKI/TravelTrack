@@ -1,9 +1,10 @@
 // src/components/StatusBadge.tsx
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
+import { MemberSafetyStatus } from '../types/models';
 
 interface Props {
-  status: 'safe' | 'warning' | 'out_of_range' | 'sos';
+  status: MemberSafetyStatus;
 }
 
 const config: Record<Props['status'], { color: string; label: string }> = {
@@ -11,6 +12,9 @@ const config: Record<Props['status'], { color: string; label: string }> = {
   warning:      { color: '#FFC107', label: '⚠️ Near edge' },
   out_of_range: { color: '#D32F2F', label: '🔴 Out of range' },
   sos:          { color: '#D32F2F', label: '🆘 SOS!' },
+  unknown:      { color: '#64748B', label: 'GPS pending' },
+  gps_uncertain:{ color: '#D97706', label: 'GPS uncertain' },
+  disconnected: { color: '#64748B', label: 'Disconnected' },
 };
 
 /**

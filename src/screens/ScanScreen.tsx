@@ -18,6 +18,7 @@ import { useTrackingStore } from '../store/useTrackingStore';
 import { isDemoMode } from '../utils/isDemoMode';
 import { startDemo, DEMO_PEERS } from '../services/demoService';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import { parseGroupInvitation } from '../utils/sessionProtocol';
 
 const DEMO = isDemoMode();
 
@@ -31,6 +32,8 @@ export function ScanScreen({ navigation }: any) {
 
   const { startScanning, connectToLeader } = useWifiDirect();
   const setRole = useTrackingStore((state) => state.setRole);
+  const pendingInvitation = useTrackingStore((state) => state.pendingInvitation);
+  const setPendingInvitation = useTrackingStore((state) => state.setPendingInvitation);
 
   const handleQRScanned = async (scannedModel: string) => {
     // Expo camera may emit the same barcode for several frames. One scan must
@@ -49,16 +52,19 @@ export function ScanScreen({ navigation }: any) {
     }
     // ──────────────────────────────────────────────────────────
 
-    if (!scannedModel.startsWith('traveltrack:group:')) {
+    const invitation = parseGroupInvitation(scannedModel);
+    if (!invitation) {
       qrLockedRef.current = false;
       Alert.alert('Invalid invitation', 'Scan the QR code shown in the leader’s TravelTrack lobby.');
       return;
     }
 
+    setPendingInvitation(invitation);
+
     // The QR code confirms the invitation but cannot safely contain a volatile
     // Wi-Fi Direct MAC address. Show the discovered hosts and let the traveller
     // choose the nearby leader instead of guessing from a model name.
-    await startScan();
+    await startScan(true);
   };
 
   const openScanner = async () => {
@@ -95,7 +101,11 @@ export function ScanScreen({ navigation }: any) {
     }
   }, [scanning]);
 
-  const startScan = async () => {
+  const startScan = async (invitationJustScanned = false) => {
+    if (!DEMO && !invitationJustScanned && !useTrackingStore.getState().pendingInvitation) {
+      Alert.alert('Invitation required', 'Scan the QR code in the leader’s lobby before choosing a nearby Wi-Fi Direct host.');
+      return;
+    }
     setScanning(true);
     setDevices([]);
 
@@ -136,10 +146,11 @@ export function ScanScreen({ navigation }: any) {
 
     try {
       if (connectToLeader) {
-        await connectToLeader(device.deviceAddress);
+        if (!pendingInvitation) throw new Error('The invitation is missing or expired. Scan the leader QR code again.');
+        await connectToLeader(device.deviceAddress, pendingInvitation);
       }
       if (setRole) setRole('member');
-      navigation.navigate('GroupLobby', { isLeader: false, groupName: device.deviceName });
+      navigation.navigate('GroupLobby', { isLeader: false, groupName: useTrackingStore.getState().group?.name || device.deviceName });
     } catch (e: any) {
       Alert.alert(
         'Connection Failed',
@@ -208,7 +219,7 @@ export function ScanScreen({ navigation }: any) {
           ) : null}
           <TouchableOpacity
             style={[styles.scanCircleBtn, scanning ? styles.scanCircleBtnScanning : null]}
-            onPress={startScan}
+            onPress={() => startScan(false)}
             disabled={scanning}
             activeOpacity={0.8}
           >

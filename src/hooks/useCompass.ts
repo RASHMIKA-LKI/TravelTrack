@@ -18,8 +18,8 @@ export interface CompassData {
 export function useCompass(updateIntervalMs: number = 100): CompassData {
   const [heading, setHeading] = useState<number>(0);
   const [isAvailable, setIsAvailable] = useState<boolean>(true);
-  const [isCalibrated, setIsCalibrated] = useState<boolean>(true);
-  const [statusText, setStatusText] = useState<string>('Compass Active');
+  const [isCalibrated, setIsCalibrated] = useState<boolean>(false);
+  const [statusText, setStatusText] = useState<string>('Compass calibrating');
 
   const myLocation = useTrackingStore((state) => state.myLocation);
   const lastHeadingRef = useRef<number>(0);

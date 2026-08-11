@@ -2,6 +2,7 @@
 import Geolocation from 'react-native-geolocation-service';
 import { PermissionsAndroid } from 'react-native';
 import { LOCATION_SYNC_INTERVAL_MS, LOCATION_FASTEST_INTERVAL_MS } from '../utils/constants';
+import { startForegroundTracking, stopForegroundTracking } from './foregroundTrackingService';
 
 interface LocationData {
   latitude: number;
@@ -32,11 +33,13 @@ class LocationService {
 
   /** Start tracking GPS — updates every 5 seconds */
   async startTracking(): Promise<void> {
+    if (this.watchId !== null) return;
     const hasPermission = await this.requestPermission();
     if (!hasPermission) {
-      console.error('❌ Location permission denied!');
-      return;
+      throw new Error('Location permission was denied. Tracking did not start.');
     }
+
+    await startForegroundTracking();
 
     // Fetch immediate single GPS fix so myLocation is available instantly
     try {
@@ -87,6 +90,7 @@ class LocationService {
       this.watchId = null;
       console.log('GPS tracking stopped.');
     }
+    void stopForegroundTracking().catch((error) => console.warn('Could not stop foreground tracking service:', error));
   }
 
   /** Get ONE location reading right now */

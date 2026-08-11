@@ -96,6 +96,8 @@ export function startDemo(): void {
       leaderId: 'leader-me',
       radiusMeters: 50,
       createdAt: Date.now(),
+      sessionId: 'demo-session',
+      joinToken: 'demo-token',
     });
   }
 
@@ -114,6 +116,7 @@ export function startDemo(): void {
   // Add demo members
   DEMO_MEMBERS.forEach((m) => {
     const pos = memberPositions[m.id];
+    const now = Date.now();
     store.addMember({
       id: m.id,
       name: m.name,
@@ -121,7 +124,11 @@ export function startDemo(): void {
       longitude: pos.lng,
       batteryLevel: m.battery,
       status: 'safe',
-      lastSeen: Date.now(),
+      lastSeen: now,
+      lastPacketReceivedAt: now,
+      lastLocationReceivedAt: now,
+      sourceFixReceivedAt: now,
+      connectionState: 'connected',
     });
   });
 
@@ -178,6 +185,10 @@ export function startDemo(): void {
         status,
         accuracy: 8,
         bearingDegrees,
+        lastPacketReceivedAt: Date.now(),
+        lastLocationReceivedAt: Date.now(),
+        sourceFixReceivedAt: Date.now(),
+        connectionState: 'connected',
       };
 
       if (status === 'out_of_range') {

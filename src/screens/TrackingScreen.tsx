@@ -28,11 +28,11 @@ import { alertManager } from '../services/alertManager';
 import { useLocation } from '../hooks/useLocation';
 import { useGeofence } from '../hooks/useGeofence';
 import { useCompass } from '../hooks/useCompass';
-import { useReconnectionCoordinator } from '../hooks/useReconnectionCoordinator';
 import { isDemoMode } from '../utils/isDemoMode';
 import { stopDemo } from '../services/demoService';
 import { firestoreService } from '../services/firestoreService';
 import { SOSOverlay } from '../components/SOSOverlay';
+import { sendSOS } from '../services/sosService';
 import {
   calculateDistance,
   calculateBearing,
@@ -63,6 +63,8 @@ export function TrackingScreen({ navigation }: any) {
   const addAlert = useTrackingStore((state) => state.addAlert);
   const setMeetupPoint = useTrackingStore((state) => state.setMeetupPoint);
   const isTracking = useTrackingStore((state) => state.isTracking);
+  const connectionStatus = useTrackingStore((state) => state.connectionStatus);
+  const allowExitRef = useRef(false);
 
   const { user } = useAuthStore();
   const guestDefault = `Guest (${Platform.OS === 'android' ? (Platform.constants as any)?.Model || 'Traveler' : 'Traveler'})`;
@@ -78,7 +80,6 @@ export function TrackingScreen({ navigation }: any) {
   // Start GPS tracking, geofence monitoring, and reconnection coordinator
   const { startTracking, stopTracking } = useLocation();
   useGeofence(); // Actively monitors distances and triggers out-of-range alerts
-  useReconnectionCoordinator(); // Lifecycle coordinator for auto P2P recovery
   const compass = useCompass(); // Real-time magnetometer orientation hook
 
   // Radar Animation
@@ -90,7 +91,13 @@ export function TrackingScreen({ navigation }: any) {
   useEffect(() => {
     // In demo mode GPS is simulated by demoService — skip real GPS tracking
     if (!DEMO) {
-      startTracking();
+      void startTracking().catch((error) => {
+        useTrackingStore.getState().setConnectionStatus('degraded');
+        Alert.alert(
+          'Location sharing did not start',
+          `${error?.message || 'Foreground location tracking is unavailable.'}\n\nYour device is not currently sending live GPS. Leave the group safely or fix permissions before relying on tracking.`
+        );
+      });
     }
 
     // Radar rotation
@@ -130,7 +137,10 @@ export function TrackingScreen({ navigation }: any) {
   // An END_GROUP message clears the member store. Do not leave a member on a
   // radar whose local group no longer exists.
   useEffect(() => {
-    if (!isTracking) navigation.replace('Home');
+    if (!isTracking) {
+      allowExitRef.current = true;
+      navigation.replace('Home');
+    }
   }, [isTracking, navigation]);
 
   const spin = radarAnim.interpolate({
@@ -166,14 +176,14 @@ export function TrackingScreen({ navigation }: any) {
       : 0;
     const accuracyMargin = Math.round(Math.max(0, myLocation?.accuracy || 0) + Math.max(0, m.accuracy || 0));
     const now = Date.now();
-    const lastReceived = m.lastReceivedAt || m.lastKnownTimestamp || m.lastSeen || now;
-    const ageSeconds = Math.round(Math.max(0, now - lastReceived) / 1000);
-    const isLive = ageSeconds <= 30;
-    const isStale = ageSeconds > 30 && ageSeconds <= 120;
-    const isOffline = ageSeconds > 120;
+    const sourceFixTime = m.sourceFixReceivedAt || m.lastKnownTimestamp || 0;
+    const ageSeconds = sourceFixTime ? Math.round(Math.max(0, now - sourceFixTime) / 1000) : Infinity;
+    const isLive = ageSeconds <= 30 && m.connectionState !== 'disconnected';
+    const isStale = ageSeconds > 30 && ageSeconds <= 120 && m.connectionState !== 'disconnected';
+    const isOffline = ageSeconds > 120 || m.connectionState === 'disconnected';
 
     // A peer remains visible on the radar up to 2 minutes after last packet arrival.
-    const hasLocation = rawHasLocation && !isOffline;
+    const hasLocation = rawHasLocation;
     const hasReliableBearing = hasLocation && gpsDistance > accuracyMargin && isLive;
 
     const bearing = rawHasLocation
@@ -181,7 +191,9 @@ export function TrackingScreen({ navigation }: any) {
       : 0;
 
     let cardinal = 'GPS uncertain';
-    if (isStale) {
+    if (isOffline) {
+      cardinal = 'Last known position';
+    } else if (isStale) {
       cardinal = `Stale (${ageSeconds}s ago)`;
     } else if (hasReliableBearing) {
       cardinal = getCardinalDirection(bearing);
@@ -229,7 +241,10 @@ export function TrackingScreen({ navigation }: any) {
           onPress: async () => {
             if (role === 'leader') {
               try {
-                tcpSocketManager.broadcast({ type: 'END_GROUP', timestamp: Date.now() });
+                if (group) tcpSocketManager.broadcast({
+                  type: 'END_GROUP', groupId: group.id, sessionId: group.sessionId,
+                  joinToken: group.joinToken, timestamp: Date.now(),
+                });
                 // Give buffered TCP writes a chance to reach members before the
                 // Group Owner and server are stopped.
                 await new Promise<void>((resolve) => setTimeout(resolve, 250));
@@ -257,12 +272,19 @@ export function TrackingScreen({ navigation }: any) {
             tcpSocketManager.stopServer();
             await wifiDirectManager.leaveGroup();
             if (resetTracking) resetTracking();
+            allowExitRef.current = true;
             navigation.replace('Home');
           },
         },
       ]
     );
   };
+
+  useEffect(() => navigation.addListener('beforeRemove', (event: any) => {
+    if (allowExitRef.current || !isTracking) return;
+    event.preventDefault();
+    Alert.alert('Tracking is still active', 'Use “End Trip” or “Leave Group” so sockets, GPS, and the foreground notification are closed safely.');
+  }), [navigation, isTracking]);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -294,8 +316,12 @@ export function TrackingScreen({ navigation }: any) {
 
     try {
       if (tcpSocketManager) {
+        if (!group) return;
         const payloadData = {
           type: 'CHAT',
+          groupId: group.id,
+          sessionId: group.sessionId,
+          joinToken: group.joinToken,
           memberId: myDeviceId,
           memberName: userName,
           message: inputText,
@@ -360,56 +386,32 @@ export function TrackingScreen({ navigation }: any) {
 
     // Broadcast over TCP
     try {
+      if (!group) return;
       const payload = {
         type: 'MEETUP_POINT',
+        groupId: group.id,
+        sessionId: group.sessionId,
+        joinToken: group.joinToken,
         ...meetup,
       };
+      let sent = false;
       if (role === 'leader' && tcpSocketManager.broadcast) {
-        tcpSocketManager.broadcast(payload);
+        sent = tcpSocketManager.broadcast(payload) > 0;
       } else if (role === 'member' && tcpSocketManager.send) {
-        tcpSocketManager.send(payload);
+        sent = tcpSocketManager.send(payload);
       }
+      Alert.alert(sent ? 'Meetup sent' : 'Meetup saved locally', sent
+        ? `Meetup point "${meetupName}" was sent over the offline group connection.`
+        : 'No connected group device confirmed the transmission.');
     } catch (e) {
       console.warn('Failed to broadcast meetup point:', e);
     }
-
-    Alert.alert('📌 Meetup Sent!', `Meetup point "${meetupName}" has been broadcast to all group members.`);
   };
 
   // ----- SOS send function -----
   const handleSOS = () => {
-    Alert.alert(
-      '🆘 SOS Broadcasted!',
-      'Your emergency distress alert and current GPS location have been sent to all group members.',
-      [{ text: 'OK' }]
-    );
-
-    if (triggerSOS) {
-      triggerSOS('You');
-    }
-
-    if (alertManager && alertManager.triggerSOSAlert) {
-      alertManager.triggerSOSAlert('You', myLocation?.latitude || 0, myLocation?.longitude || 0);
-    }
-
-    try {
-      const sosPayload = {
-        type: 'SOS',
-        memberId: myDeviceId,
-        memberName: userName,
-        latitude: myLocation?.latitude || 0,
-        longitude: myLocation?.longitude || 0,
-        message: 'SOS emergency alert!',
-        timestamp: Date.now(),
-      };
-      if (role === 'leader' && tcpSocketManager.broadcast) {
-        tcpSocketManager.broadcast(sosPayload);
-      } else if (role === 'member' && tcpSocketManager.send) {
-        tcpSocketManager.send(sosPayload);
-      }
-    } catch (e) {
-      console.warn('Failed to send SOS over TCP:', e);
-    }
+    const result = sendSOS();
+    Alert.alert(result.sent ? 'SOS transmission started' : 'SOS not delivered', result.message);
   };
 
   // Renders the appropriate layout based on active tab
@@ -418,11 +420,18 @@ export function TrackingScreen({ navigation }: any) {
       case 'tracking':
         return (
           <ScrollView style={styles.tabScroll} contentContainerStyle={{ paddingBottom: 100 }} showsVerticalScrollIndicator={false}>
+            {connectionStatus !== 'connected' && (
+              <View style={styles.connectionWarning}>
+                <Text style={styles.connectionWarningText}>
+                  {connectionStatus === 'reconnecting' ? 'Reconnecting to the original group leader…' : 'Offline connection degraded. Positions shown may be last known.'}
+                </Text>
+              </View>
+            )}
             {/* Horizontal Active Friends Carousel */}
             <View style={styles.activeFriendsCard}>
               <View style={styles.friendsHeader}>
                 <Text style={styles.friendsTitle}>Active Group Members</Text>
-              <Text style={styles.friendsCount}>{displayMembers.length + 1} online</Text>
+              <Text style={styles.friendsCount}>{displayMembers.filter((member) => member.isLive).length + 1} online</Text>
               </View>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.friendsListScroll}>
                 {/* Own Device Avatar (Green Dot 🟢) */}
@@ -454,9 +463,9 @@ export function TrackingScreen({ navigation }: any) {
               <View style={styles.radarHeaderInfo}>
                 <Text style={styles.radarTitle}>📍 Group Safety Radar</Text>
                 <Text style={styles.radarSubtitle}>
-                  {compass.isAvailable
+                  {compass.isAvailable && compass.isCalibrated
                     ? `🧭 Dynamic Heading: ${compass.heading}° (${getCardinalDirection(compass.heading)}) • Safe radius: ${radiusMeters}m`
-                    : `GPS estimate • Safe radius: ${radiusMeters}m • North-Up`}
+                    : `${compass.statusText} • Safe radius: ${radiusMeters}m • North-Up`}
                 </Text>
               </View>
 
@@ -464,7 +473,7 @@ export function TrackingScreen({ navigation }: any) {
                 <View style={styles.radarOuterCircle}>
                   {/* Rotated Compass Directions based on device magnetometer heading */}
                   {(() => {
-                    const devHeading = compass.heading;
+                    const devHeading = compass.isAvailable && compass.isCalibrated ? compass.heading : 0;
                     // Angles for N (0°), E (90°), S (180°), W (270°) relative to device heading
                     const getCardPos = (targetAngle: number, radius: number = 105) => {
                       const relAngle = targetAngle - devHeading;
@@ -808,12 +817,13 @@ export function TrackingScreen({ navigation }: any) {
                   <Text style={styles.settingItemIcon}>🔔</Text>
                   <View>
                     <Text style={styles.settingItemLabel}>Sound Alerts</Text>
-                    <Text style={styles.settingItemDesc}>Play alert boundary sirens</Text>
+                    <Text style={styles.settingItemDesc}>Not available in this build</Text>
                   </View>
                 </View>
                 <Switch
                   value={soundEnabled}
                   onValueChange={toggleSound}
+                  disabled
                   trackColor={{ false: '#CBD5E1', true: 'rgba(10, 74, 109, 0.5)' }}
                   thumbColor={soundEnabled ? '#0A4A6D' : '#F8F9FA'}
                 />
@@ -973,6 +983,8 @@ export function TrackingScreen({ navigation }: any) {
 }
 
 const styles = StyleSheet.create({
+  connectionWarning: { backgroundColor: '#FFF7ED', borderColor: '#FB923C', borderWidth: 1, borderRadius: 12, padding: 12, marginBottom: 12 },
+  connectionWarningText: { color: '#9A3412', fontSize: 13, fontWeight: '700', textAlign: 'center' },
   safe: {
     flex: 1,
     backgroundColor: '#F8F9FA',

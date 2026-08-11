@@ -1,5 +1,6 @@
 // src/services/alertManager.ts
 import { Vibration, Alert } from 'react-native';
+import { useSettingsStore } from '../store/useSettingsStore';
 // Note: react-native-sound is used for audio
 // import Sound from 'react-native-sound';
 
@@ -13,7 +14,9 @@ class AlertManager {
     console.log(`⚠️ ALERT: ${memberName} is ${distance}m away — OUT OF RANGE!`);
 
     // Vibration pattern: vibrate, pause, vibrate, pause, vibrate
-    Vibration.vibrate([0, 500, 200, 500, 200, 500]);
+    if (useSettingsStore.getState().vibrationEnabled) {
+      Vibration.vibrate([0, 500, 200, 500, 200, 500]);
+    }
 
     // Show in-app alert
     Alert.alert(
@@ -33,11 +36,15 @@ class AlertManager {
     console.log(`🆘 SOS from ${memberName} at ${latitude}, ${longitude}`);
 
     // Long repeated vibration
-    Vibration.vibrate([0, 1000, 300, 1000, 300, 1000], true); // true = repeat
+    if (useSettingsStore.getState().vibrationEnabled) {
+      Vibration.vibrate([0, 1000, 300, 1000, 300, 1000], true);
+    }
 
     Alert.alert(
       '🆘 SOS ALERT!',
-      `${memberName} needs help! Their location has been sent to the group.`,
+      latitude || longitude
+        ? `${memberName} needs help. Their last reported location is available.`
+        : `${memberName} needs help. No GPS location was included.`,
       [
         {
           text: 'Acknowledge',
@@ -58,7 +65,7 @@ class AlertManager {
    */
   triggerReturnAlert(memberName: string): void {
     console.log(`✅ ${memberName} returned to safe zone`);
-    Vibration.vibrate(200); // Single short vibration
+    if (useSettingsStore.getState().vibrationEnabled) Vibration.vibrate(200);
     // TODO: Add success sound: this.playSound('member_returned.mp3')
   }
 

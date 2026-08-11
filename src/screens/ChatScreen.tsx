@@ -22,6 +22,7 @@ export function ChatScreen({ navigation }: any) {
   const addMessage = useTrackingStore((state) => state.addMessage);
   const role = useTrackingStore((state) => state.role);
   const myDeviceId = useTrackingStore((state) => state.myDeviceId);
+  const group = useTrackingStore((state) => state.group);
   const flatListRef = useRef<FlatList>(null);
 
   const displayMessages = messages.map(msg => ({
@@ -48,8 +49,12 @@ export function ChatScreen({ navigation }: any) {
     // Attempt peer-to-peer transmission
     try {
       if (tcpSocketManager) {
+        if (!group) return;
         const payloadData = {
           type: 'CHAT',
+          groupId: group.id,
+          sessionId: group.sessionId,
+          joinToken: group.joinToken,
           memberId: myDeviceId,
           memberName: 'You',
           message: inputText,

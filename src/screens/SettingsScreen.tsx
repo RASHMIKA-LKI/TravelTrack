@@ -70,11 +70,12 @@ export function SettingsScreen({ navigation }: any) {
             <View style={styles.settingRow}>
               <View style={styles.settingInfo}>
                 <Text style={styles.settingLabel}>Sound Alerts</Text>
-                <Text style={styles.settingDesc}>Play warning siren and safety return sounds</Text>
+                <Text style={styles.settingDesc}>Not available in this build; alerts use on-screen messages and optional vibration</Text>
               </View>
               <Switch
                 value={soundEnabled}
                 onValueChange={toggleSound}
+                disabled
                 trackColor={{ false: '#D0D0D0', true: colors.primaryLight }}
                 thumbColor={soundEnabled ? colors.primary : '#F4F3F4'}
               />
