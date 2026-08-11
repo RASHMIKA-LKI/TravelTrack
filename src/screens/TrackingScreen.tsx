@@ -27,6 +27,8 @@ import { wifiDirectManager } from '../services/wifiDirectManager';
 import { alertManager } from '../services/alertManager';
 import { useLocation } from '../hooks/useLocation';
 import { useGeofence } from '../hooks/useGeofence';
+import { useCompass } from '../hooks/useCompass';
+import { useReconnectionCoordinator } from '../hooks/useReconnectionCoordinator';
 import { isDemoMode } from '../utils/isDemoMode';
 import { stopDemo } from '../services/demoService';
 import { firestoreService } from '../services/firestoreService';
@@ -73,9 +75,11 @@ export function TrackingScreen({ navigation }: any) {
   const toggleSound = settings?.toggleSound ?? (() => {});
   const toggleVibration = settings?.toggleVibration ?? (() => {});
 
-  // Start GPS tracking and geofence monitoring when this screen mounts
+  // Start GPS tracking, geofence monitoring, and reconnection coordinator
   const { startTracking, stopTracking } = useLocation();
   useGeofence(); // Actively monitors distances and triggers out-of-range alerts
+  useReconnectionCoordinator(); // Lifecycle coordinator for auto P2P recovery
+  const compass = useCompass(); // Real-time magnetometer orientation hook
 
   // Radar Animation
   const radarAnim = useRef(new Animated.Value(0)).current;
@@ -449,16 +453,41 @@ export function TrackingScreen({ navigation }: any) {
             <View style={styles.radarCard}>
               <View style={styles.radarHeaderInfo}>
                 <Text style={styles.radarTitle}>📍 Group Safety Radar</Text>
-                <Text style={styles.radarSubtitle}>GPS estimate • Safe radius: {radiusMeters}m • Your device is centered</Text>
+                <Text style={styles.radarSubtitle}>
+                  {compass.isAvailable
+                    ? `🧭 Dynamic Heading: ${compass.heading}° (${getCardinalDirection(compass.heading)}) • Safe radius: ${radiusMeters}m`
+                    : `GPS estimate • Safe radius: ${radiusMeters}m • North-Up`}
+                </Text>
               </View>
 
               <View style={styles.radarContainer}>
                 <View style={styles.radarOuterCircle}>
-                  {/* Compass Directions */}
-                  <Text style={[styles.cardinalText, styles.cardinalN]}>N</Text>
-                  <Text style={[styles.cardinalText, styles.cardinalE]}>E</Text>
-                  <Text style={[styles.cardinalText, styles.cardinalS]}>S</Text>
-                  <Text style={[styles.cardinalText, styles.cardinalW]}>W</Text>
+                  {/* Rotated Compass Directions based on device magnetometer heading */}
+                  {(() => {
+                    const devHeading = compass.heading;
+                    // Angles for N (0°), E (90°), S (180°), W (270°) relative to device heading
+                    const getCardPos = (targetAngle: number, radius: number = 105) => {
+                      const relAngle = targetAngle - devHeading;
+                      const rad = (relAngle * Math.PI) / 180;
+                      return {
+                        x: radius * Math.sin(rad),
+                        y: -radius * Math.cos(rad),
+                      };
+                    };
+                    const nPos = getCardPos(0);
+                    const ePos = getCardPos(90);
+                    const sPos = getCardPos(180);
+                    const wPos = getCardPos(270);
+
+                    return (
+                      <>
+                        <Text style={[styles.cardinalText, { transform: [{ translateX: nPos.x }, { translateY: nPos.y }] }]}>N</Text>
+                        <Text style={[styles.cardinalText, { transform: [{ translateX: ePos.x }, { translateY: ePos.y }] }]}>E</Text>
+                        <Text style={[styles.cardinalText, { transform: [{ translateX: sPos.x }, { translateY: sPos.y }] }]}>S</Text>
+                        <Text style={[styles.cardinalText, { transform: [{ translateX: wPos.x }, { translateY: wPos.y }] }]}>W</Text>
+                      </>
+                    );
+                  })()}
 
                   {/* Concentric Distance Rings */}
                   <View style={styles.radarMiddleCircle} />
@@ -467,13 +496,14 @@ export function TrackingScreen({ navigation }: any) {
                   {/* Animated Sweep Line */}
                   <Animated.View style={[styles.radarSweep, { transform: [{ rotate: spin }] }]} />
 
-                  {/* Own Device Center Dot (Always 🟢 Green Circle) */}
+                  {/* Own Device Center Dot with Upward Orientation Arrow (You are facing UP ⬆️) */}
                   <View style={styles.ownCenterDot}>
+                    <Text style={{ fontSize: 10, color: '#3B82F6', fontWeight: 'bold' }}>▲</Text>
                     <Text style={styles.ownDotEmoji}>🟢</Text>
                     {role === 'leader' && <Text style={styles.ownLeaderBadge}>👑</Text>}
                   </View>
 
-                  {/* GPS distance gives an approximate ring; bearing gives direction. */}
+                  {/* GPS distance gives an approximate ring; bearing relative to device heading gives screen direction */}
                   {displayMembers.filter((m) => m.hasLocation).map((m) => {
                     let visualDist = 0;
                     if (m.status === 'out_of_range' || m.distance > radiusMeters) {
@@ -486,8 +516,9 @@ export function TrackingScreen({ navigation }: any) {
                       visualDist = 70 + ((m.distance - radiusMeters * 0.66) / (radiusMeters * 0.34)) * 28; // Outer Ring
                     }
                     
-                    // Convert bearing angle to screen offsets (0° North = UP = -Y)
-                    const radAngle = (m.bearing * Math.PI) / 180;
+                    // Convert target bearing relative to device heading to screen offsets (0° = Top of screen = -Y)
+                    const relBearing = m.bearing - compass.heading;
+                    const radAngle = (relBearing * Math.PI) / 180;
                     const xOffset = visualDist * Math.sin(radAngle);
                     const yOffset = -visualDist * Math.cos(radAngle);
 
@@ -523,9 +554,14 @@ export function TrackingScreen({ navigation }: any) {
                 </View>
               </View>
 
-              {/* Radar Ring Legend */}
+              {/* Magnetometer Confidence & Radar Ring Legend */}
+              {!compass.isCalibrated && compass.isAvailable && (
+                <Text style={[styles.radarAccuracyNote, { color: '#D97706', fontWeight: '600' }]}>
+                  ⚠️ {compass.statusText}
+                </Text>
+              )}
               <Text style={styles.radarAccuracyNote}>
-                Each recent peer location is shown. “GPS uncertain” means the distance is smaller than the current GPS margin.
+                Up arrow (▲) indicates the direction your phone is physically facing. Rotating your phone rotates the radar map.
               </Text>
               <View style={styles.radarLegendRow}>
                 <View style={styles.legendItem}>
@@ -1132,8 +1168,12 @@ const styles = StyleSheet.create({
   },
   ownCenterDot: {
     position: 'absolute',
+    top: '50%',
+    left: '50%',
     width: 32,
     height: 32,
+    marginTop: -16,
+    marginLeft: -16,
     borderRadius: 16,
     backgroundColor: '#E6F4EA',
     justifyContent: 'center',
@@ -1157,7 +1197,15 @@ const styles = StyleSheet.create({
   },
   cardinalText: {
     position: 'absolute',
-    fontSize: 10,
+    top: '50%',
+    left: '50%',
+    width: 20,
+    height: 20,
+    marginTop: -10,
+    marginLeft: -10,
+    textAlign: 'center',
+    lineHeight: 20,
+    fontSize: 11,
     fontWeight: '800',
     color: '#64748B',
   },
@@ -1167,8 +1215,12 @@ const styles = StyleSheet.create({
   cardinalW: { left: 8 },
   memberRadarDot: {
     position: 'absolute',
+    top: '50%',
+    left: '50%',
     width: 28,
     height: 28,
+    marginTop: -14,
+    marginLeft: -14,
     borderRadius: 14,
     justifyContent: 'center',
     alignItems: 'center',

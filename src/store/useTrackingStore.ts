@@ -63,7 +63,7 @@ interface TrackingState {
   isTracking: boolean;
   sosActive: boolean;
   sosTriggeredBy: string | null;
-  connectionStatus: 'disconnected' | 'scanning' | 'connecting' | 'connected';
+  connectionStatus: 'disconnected' | 'scanning' | 'connecting' | 'connected' | 'reconnecting';
   alerts: Alert[];
   messages: ChatMessage[];
   radiusMeters: number;
@@ -79,7 +79,7 @@ interface TrackingState {
   setIsTracking: (value: boolean) => void;
   triggerSOS: (memberName: string) => void;
   clearSOS: () => void;
-  setConnectionStatus: (status: 'disconnected' | 'scanning' | 'connecting' | 'connected') => void;
+  setConnectionStatus: (status: 'disconnected' | 'scanning' | 'connecting' | 'connected' | 'reconnecting') => void;
   addAlert: (alert: Omit<Alert, 'id' | 'timestamp' | 'read'>) => void;
   markAlertsRead: () => void;
   addMessage: (message: Omit<ChatMessage, 'id' | 'timestamp'>) => void;

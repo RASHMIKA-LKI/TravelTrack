@@ -32,55 +32,65 @@ export function useLocation() {
     };
   }, [setMyLocation]);
 
-  // Sync location over P2P network — only when actually connected
-  useEffect(() => {
-    if (!myLocation) return;
-
-    // ✅ BUG FIX: Do NOT try to send/broadcast if not yet connected.
-    // This prevents noisy errors and potential crashes when location updates
-    // fire before the TCP connection is established.
-    if (connectionStatus !== 'connected') return;
+  // Sync location over P2P network — when connected or on periodic 5s heartbeat
+  const sendLocationSync = useCallback(() => {
+    const state = useTrackingStore.getState();
+    const loc = state.myLocation;
+    if (!loc || state.connectionStatus !== 'connected') return;
 
     if (role === 'member') {
-      // Guard: only send if the TCP client is actually connected
       if (!tcpSocketManager.isClientConnected) return;
 
       const payload = {
         type: 'LOCATION',
+        groupId: state.group?.id || 'default-group',
         memberId: myDeviceId,
         memberName: userName,
-        latitude: myLocation.latitude,
-        longitude: myLocation.longitude,
-        accuracy: myLocation.accuracy,
-        bearing: myLocation.bearing,
-        speed: myLocation.speed,
-        timestamp: myLocation.timestamp || Date.now(),
+        latitude: loc.latitude,
+        longitude: loc.longitude,
+        accuracy: loc.accuracy,
+        bearing: loc.bearing,
+        speed: loc.speed,
+        timestamp: Date.now(),
       };
       tcpSocketManager.send(payload);
     } else if (role === 'leader') {
-      // Guard: only broadcast if the TCP server is running
       if (!tcpSocketManager.isServerRunning) return;
 
-      const members = useTrackingStore.getState().members;
       const payload = {
         type: 'GROUP_STATE',
+        groupId: state.group?.id || 'default-group',
         members: [
           {
             id: myDeviceId,
             name: userName,
-            latitude: myLocation.latitude,
-            longitude: myLocation.longitude,
-            accuracy: myLocation.accuracy,
+            latitude: loc.latitude,
+            longitude: loc.longitude,
+            accuracy: loc.accuracy,
             status: 'safe' as const,
-            lastSeen: myLocation.timestamp || Date.now(),
+            lastSeen: Date.now(),
             isLeader: true,
           },
-          ...members,
+          ...state.members,
         ],
       };
       tcpSocketManager.broadcast(payload);
     }
-  }, [myLocation, role, userName, connectionStatus, myDeviceId]);
+  }, [role, myDeviceId, userName]);
+
+  useEffect(() => {
+    sendLocationSync();
+  }, [myLocation, sendLocationSync]);
+
+  // Outbound 5-second heartbeat so stationary members do not become stale
+  useEffect(() => {
+    if (connectionStatus !== 'connected') return;
+    const intervalId = setInterval(() => {
+      sendLocationSync();
+    }, 5000);
+
+    return () => clearInterval(intervalId);
+  }, [connectionStatus, sendLocationSync]);
 
   /** Call this to start GPS tracking */
   const startTracking = useCallback(async () => {

@@ -30,8 +30,6 @@ export function SettingsScreen({ navigation }: any) {
 
   const toggleSound = settings?.toggleSound ?? (() => {});
   const toggleVibration = settings?.toggleVibration ?? (() => {});
-  const setGpsInterval = settings?.setGpsInterval ?? (() => {});
-  const setDefaultRadius = settings?.setDefaultRadius ?? (() => {});
 
   const handleLogout = () => {
     const title = isGuest ? 'Exit Guest Mode' : 'Confirm Logout';
@@ -98,49 +96,24 @@ export function SettingsScreen({ navigation }: any) {
             </View>
           </View>
 
-          <Text style={styles.sectionTitle}>GPS Configuration</Text>
+          <Text style={styles.sectionTitle}>GPS & Geofence Configuration</Text>
           <View style={styles.card}>
-            <Text style={styles.settingLabel}>Location Sync Frequency</Text>
-            <Text style={styles.settingDesc}>Frequency at which device GPS uploads coordinates</Text>
-            
-            <View style={styles.btnRow}>
-              {[2000, 3000, 5000, 10000].map((interval) => {
-                const active = gpsIntervalMs === interval;
-                return (
-                  <TouchableOpacity
-                    key={interval}
-                    style={[styles.optionBtn, active ? styles.optionBtnActive : null]}
-                    onPress={() => setGpsInterval(interval)}
-                  >
-                    <Text style={[styles.optionBtnText, active ? styles.optionBtnTextActive : null]}>
-                      {interval / 1000}s
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
+            <View style={styles.settingRow}>
+              <View style={styles.settingInfo}>
+                <Text style={styles.settingLabel}>High-Precision Location Sync</Text>
+                <Text style={styles.settingDesc}>GPS polling and P2P heartbeat fixed at 5.0 seconds</Text>
+              </View>
+              <Text style={{ fontWeight: '700', color: colors.primary, fontSize: 16 }}>5s</Text>
             </View>
-          </View>
 
-          <Text style={styles.sectionTitle}>Geofence Configuration</Text>
-          <View style={styles.card}>
-            <Text style={styles.settingLabel}>Default Safe Radius</Text>
-            <Text style={styles.settingDesc}>Initial safe boundary radius applied when hosting trips</Text>
-            
-            <View style={styles.btnRow}>
-              {[25, 50, 75, 100].map((r) => {
-                const active = defaultRadiusMeters === r;
-                return (
-                  <TouchableOpacity
-                    key={r}
-                    style={[styles.optionBtn, active ? styles.optionBtnActive : null]}
-                    onPress={() => setDefaultRadius(r)}
-                  >
-                    <Text style={[styles.optionBtnText, active ? styles.optionBtnTextActive : null]}>
-                      {r}m
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
+            <View style={styles.divider} />
+
+            <View style={styles.settingRow}>
+              <View style={styles.settingInfo}>
+                <Text style={styles.settingLabel}>Group Safe Boundary Radius</Text>
+                <Text style={styles.settingDesc}>Geofence alert threshold fixed at 50 meters</Text>
+              </View>
+              <Text style={{ fontWeight: '700', color: colors.primary, fontSize: 16 }}>50m</Text>
             </View>
           </View>
 

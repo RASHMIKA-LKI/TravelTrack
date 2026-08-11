@@ -16,17 +16,17 @@ import { useTrackingStore } from '../store/useTrackingStore';
 import { useWifiDirect } from '../hooks/useWifiDirect';
 import { isDemoMode } from '../utils/isDemoMode';
 import { startDemo } from '../services/demoService';
+import { SAFE_RADIUS_METERS } from '../utils/constants';
 
 const DEMO = isDemoMode();
 
 export function CreateGroupScreen({ navigation }: any) {
   const [groupName, setGroupName] = useState('');
-  const [radius, setRadius] = useState(50);
   const [loading, setLoading] = useState(false);
 
+  const radius = SAFE_RADIUS_METERS;
   const setRole = useTrackingStore((state) => state.setRole);
   const setGroup = useTrackingStore((state) => state.setGroup);
-  const setStoreRadius = useTrackingStore((state) => state.setRadius);
   const setIsTracking = useTrackingStore((state) => state.setIsTracking);
   const myDeviceId = useTrackingStore((state) => state.myDeviceId);
   const { startHosting } = useWifiDirect();
@@ -41,9 +41,7 @@ export function CreateGroupScreen({ navigation }: any) {
 
     // ── DEMO MODE ──────────────────────────────────────────────────────────
     if (DEMO) {
-      // Skip all Wi-Fi Direct / TCP logic. Seed the store with simulated data.
       startDemo();
-      setStoreRadius(radius);
       setGroup({
         id: 'demo-group',
         name: groupName || '🗺️ Demo Trip',
@@ -55,15 +53,11 @@ export function CreateGroupScreen({ navigation }: any) {
       navigation.navigate('GroupLobby', { groupName: groupName || '🗺️ Demo Trip', isLeader: true });
       return;
     }
-    // ───────────────────────────────────────────────────────────────────────
 
     try {
-      // ✅ Start Wi-Fi Direct discovery + TCP Server
       await startHosting();
 
-      // Configure group in the store
       setRole('leader');
-      setStoreRadius(radius);
       setGroup({
         id: Date.now().toString(),
         name: groupName,
@@ -78,33 +72,12 @@ export function CreateGroupScreen({ navigation }: any) {
       const msg: string = error?.message || 'Unknown error';
       Alert.alert(
         'Wi-Fi Direct Error',
-        'Could not start peer discovery.\n\n' +
-          '• Make sure Wi-Fi is ON\n' +
+        'Could not start group hosting.\n\n' +
+          '• Make sure Wi-Fi is turned ON\n' +
           '• Grant Location + Nearby Devices permissions in Settings\n' +
           '• Toggle Wi-Fi off/on and try again\n\n' +
           'Detail: ' + msg,
-        [
-          {
-            text: 'Try Anyway',
-            onPress: () => {
-              // TCP server already started — proceed to lobby even if
-              // Wi-Fi Direct discovery failed. Members who connect via
-              // Wi-Fi Direct from their side will still reach the TCP server.
-              setRole('leader');
-              setStoreRadius(radius);
-              setGroup({
-                id: Date.now().toString(),
-                name: groupName,
-                leaderId: myDeviceId,
-                radiusMeters: radius,
-                createdAt: Date.now(),
-              });
-              setIsTracking(true);
-              navigation.navigate('GroupLobby', { groupName, isLeader: true });
-            },
-          },
-          { text: 'Cancel', style: 'cancel' },
-        ]
+        [{ text: 'OK', style: 'cancel' }]
       );
     } finally {
       setLoading(false);
@@ -141,33 +114,12 @@ export function CreateGroupScreen({ navigation }: any) {
           />
 
           <View style={styles.radiusHeader}>
-            <Text style={styles.label}>Safe Radius Boundary</Text>
+            <Text style={styles.label}>Safe Boundary Radius</Text>
             <Text style={styles.radiusVal}>{radius} meters</Text>
           </View>
           <Text style={styles.desc}>
-            An automatic alert banner will fire and devices will vibrate/sound if members exceed this distance.
+            Automatic alert banner and sound/vibration alerts will fire whenever group members exceed 50 meters from the leader.
           </Text>
-
-          <View style={styles.radiusGrid}>
-            {[25, 50, 75, 100].map((r) => {
-              const active = radius === r;
-              return (
-                <TouchableOpacity
-                  key={r}
-                  style={[styles.radiusCard, active ? styles.radiusCardActive : null]}
-                  onPress={() => setRadius(r)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={[styles.radiusNum, active ? styles.radiusNumActive : null]}>
-                    {r}m
-                  </Text>
-                  <Text style={[styles.radiusLabel, active ? styles.radiusLabelActive : null]}>
-                    {r === 25 ? 'Close' : r === 50 ? 'Standard' : r === 75 ? 'Far' : 'Max Limit'}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
 
           <View style={styles.flexFiller} />
 
