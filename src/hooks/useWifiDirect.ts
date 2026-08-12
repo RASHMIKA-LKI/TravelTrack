@@ -14,7 +14,7 @@ import {
 } from '../utils/sessionProtocol';
 import { reconstructSourceFixTime } from '../utils/trackingFreshness';
 
-const HANDSHAKE_TIMEOUT_MS = 10_000;
+const HANDSHAKE_TIMEOUT_MS = 25_000;
 const seenSOSEvents = new Set<string>();
 const allowedStatuses = new Set<MemberSafetyStatus>([
   'unknown', 'safe', 'warning', 'out_of_range', 'gps_uncertain', 'disconnected', 'sos',
@@ -209,8 +209,7 @@ export function useWifiDirect() {
         const memberId = sanitizeTransportText(payload.memberId, '', 256);
         if (!memberId) return;
         if (tcpSocketManager.isMemberAssociated(memberId, socketId)) {
-          tcpSocketManager.sendToSocket(socketId, { type: 'REJECT', reason: 'That member identity is already connected.' });
-          return;
+          console.log(`[Leader] Member ${memberId} rejoining on new socket ${socketId}. Updating socket association.`);
         }
         const now = Date.now();
         tcpSocketManager.associateSocket(socketId, memberId);
@@ -302,6 +301,17 @@ export function useWifiDirect() {
       setupLeaderMessageHandler();
       await tcpSocketManager.startServer();
       await wifiDirectManager.startHosting();
+      const creds = await wifiDirectManager.getGroupCredentials();
+      if (creds) {
+        const currentGroup = useTrackingStore.getState().group;
+        if (currentGroup) {
+          useTrackingStore.getState().setGroup({
+            ...currentGroup,
+            networkName: creds.networkName,
+            passphrase: creds.passphrase,
+          });
+        }
+      }
       setConnectionStatus('connected');
     } catch (error) {
       setConnectionStatus('disconnected');
@@ -351,5 +361,40 @@ export function useWifiDirect() {
     }
   }, [setConnectionStatus]);
 
-  return { startHosting, startScanning, connectToLeader };
+  const connectToLeaderByCredentials = useCallback(async (invitation: GroupInvitation) => {
+    if (invitation.expiresAt <= Date.now()) throw new Error('The invitation expired. Scan a new QR code from the leader.');
+    if (!invitation.networkName) throw new Error('Invitation is missing group credentials.');
+    setConnectionStatus('connecting');
+    const state = useTrackingStore.getState();
+    state.setPendingInvitation(invitation);
+    try {
+      const leaderIp = await wifiDirectManager.connectByCredentials(invitation.networkName, invitation.passphrase || '');
+      state.setLeaderConnection('CREDENTIAL_JOIN', leaderIp);
+      installMemberMessageHandler();
+      tcpSocketManager.disconnect();
+      await tcpSocketManager.connectToServer(leaderIp);
+      const user = useAuthStore.getState().user;
+      const memberName = user?.displayName || user?.email?.split('@')[0] || `Guest ${state.myDeviceId.slice(-4)}`;
+      const handshake = new Promise<void>((resolve, reject) => {
+        pendingHandshake = {
+          resolve,
+          reject,
+          timer: setTimeout(() => rejectPendingHandshake('The leader did not confirm this group within 10 seconds.'), HANDSHAKE_TIMEOUT_MS),
+        };
+      });
+      if (!tcpSocketManager.send({
+        type: 'JOIN', groupId: invitation.groupId, sessionId: invitation.sessionId,
+        joinToken: invitation.joinToken, memberId: state.myDeviceId,
+        memberName, timestamp: Date.now(),
+      })) rejectPendingHandshake('The TCP connection closed before the join request was sent.');
+      await handshake;
+    } catch (error) {
+      rejectPendingHandshake('Group connection failed.');
+      setConnectionStatus('disconnected');
+      tcpSocketManager.disconnect();
+      throw error;
+    }
+  }, [setConnectionStatus]);
+
+  return { startHosting, startScanning, connectToLeader, connectToLeaderByCredentials };
 }

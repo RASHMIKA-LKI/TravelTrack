@@ -1,5 +1,5 @@
 // src/screens/TripHistoryScreen.tsx
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -8,39 +8,52 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   StatusBar,
+  RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../theme/colors';
 import { useAuthStore } from '../store/useAuthStore';
 import { firestoreService } from '../services/firestoreService';
-import { TripRecord } from '../types/models';
+import { offlineSyncService, ExtendedTripRecord } from '../services/offlineSyncService';
 
 export function TripHistoryScreen({ navigation }: any) {
-  const [trips, setTrips] = useState<TripRecord[]>([]);
+  const [trips, setTrips] = useState<ExtendedTripRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const { user } = useAuthStore();
 
-  useEffect(() => {
-    async function loadHistory() {
-      if (!user) {
-        setLoading(false);
-        return;
-      }
-      try {
-        if (firestoreService && firestoreService.getTripHistory) {
-          const history = await firestoreService.getTripHistory(user.uid);
-          setTrips(history);
-        }
-      } catch (e) {
-        console.warn('Trip history read error:', e);
-      } finally {
-        setLoading(false);
-      }
+  const loadHistory = useCallback(async () => {
+    if (!user) {
+      setLoading(false);
+      return;
     }
-    loadHistory();
+    try {
+      const history = await firestoreService.getTripHistory(user.uid);
+      setTrips(history);
+    } catch (e) {
+      console.warn('Trip history read error:', e);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
   }, [user]);
 
-  const displayTrips = trips;
+  useEffect(() => {
+    loadHistory();
+  }, [loadHistory]);
+
+  const handleSyncNow = async () => {
+    setSyncing(true);
+    try {
+      await offlineSyncService.syncPendingData();
+      await loadHistory();
+    } catch (e) {
+      console.warn('Manual sync error:', e);
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   const formatDate = (timestamp: number) => {
     return new Date(timestamp).toLocaleDateString([], {
@@ -66,7 +79,13 @@ export function TripHistoryScreen({ navigation }: any) {
             <Text style={styles.backText}>← Back</Text>
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Trip History</Text>
-          <View style={{ width: 44 }} />
+          <TouchableOpacity style={styles.syncBtn} onPress={handleSyncNow} disabled={syncing}>
+            {syncing ? (
+              <ActivityIndicator color={colors.primary} size="small" />
+            ) : (
+              <Text style={styles.syncBtnText}>Sync 🔄</Text>
+            )}
+          </TouchableOpacity>
         </View>
 
         {loading ? (
@@ -74,48 +93,68 @@ export function TripHistoryScreen({ navigation }: any) {
             <ActivityIndicator color={colors.primary} size="large" />
             <Text style={styles.loaderText}>Loading trip logs...</Text>
           </View>
-        ) : displayTrips.length === 0 ? (
+        ) : trips.length === 0 ? (
           <View style={styles.emptyContainer}>
             <Text style={styles.emptyIcon}>⛰️</Text>
             <Text style={styles.emptyTitle}>No Trips Logged Yet</Text>
             <Text style={styles.emptyDesc}>
-              Complete your first group trip to see your logs and duration stats tracked here.
+              Complete your first group trip offline or online to see your logs and duration stats tracked here.
             </Text>
           </View>
         ) : (
           <FlatList
-            data={displayTrips}
-            keyExtractor={(item) => item.id}
+            data={trips}
+            keyExtractor={(item, index) => item.id || `trip_${index}`}
             contentContainerStyle={styles.listContent}
             showsVerticalScrollIndicator={false}
-            renderItem={({ item }) => (
-              <View style={styles.tripCard}>
-                <View style={styles.cardTopRow}>
-                  <Text style={styles.tripName}>{item.groupName}</Text>
-                  <View style={styles.completedBadge}>
-                    <Text style={styles.badgeText}>COMPLETED</Text>
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={() => {
+                  setRefreshing(true);
+                  loadHistory();
+                }}
+                colors={[colors.primary]}
+              />
+            }
+            renderItem={({ item }) => {
+              const isPending = item.syncStatus === 'pending';
+              return (
+                <View style={styles.tripCard}>
+                  <View style={styles.cardTopRow}>
+                    <Text style={styles.tripName}>{item.groupName}</Text>
+                    <View
+                      style={[
+                        styles.badge,
+                        isPending ? styles.pendingBadge : styles.syncedBadge,
+                      ]}
+                    >
+                      <Text style={[styles.badgeText, isPending ? styles.pendingText : styles.syncedText]}>
+                        {isPending ? '📱 SAVED LOCALLY' : '☁️ SYNCED'}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <Text style={styles.tripDate}>📅 {formatDate(item.startTime)}</Text>
+
+                  <View style={styles.divider} />
+
+                  <View style={styles.cardStatsRow}>
+                    <View style={styles.cardStat}>
+                      <Text style={styles.statLabel}>DURATION</Text>
+                      <Text style={styles.statVal}>
+                        ⏱️ {calculateDuration(item.startTime, item.endTime)}
+                      </Text>
+                    </View>
+
+                    <View style={styles.cardStat}>
+                      <Text style={styles.statLabel}>MEMBERS</Text>
+                      <Text style={styles.statVal}>👥 {item.memberCount} people</Text>
+                    </View>
                   </View>
                 </View>
-
-                <Text style={styles.tripDate}>📅 {formatDate(item.startTime)}</Text>
-
-                <View style={styles.divider} />
-
-                <View style={styles.cardStatsRow}>
-                  <View style={styles.cardStat}>
-                    <Text style={styles.statLabel}>DURATION</Text>
-                    <Text style={styles.statVal}>
-                      ⏱️ {calculateDuration(item.startTime, item.endTime)}
-                    </Text>
-                  </View>
-
-                  <View style={styles.cardStat}>
-                    <Text style={styles.statLabel}>MEMBERS</Text>
-                    <Text style={styles.statVal}>👥 {item.memberCount} people</Text>
-                  </View>
-                </View>
-              </View>
-            )}
+              );
+            }}
           />
         )}
       </View>
@@ -152,6 +191,17 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: 'bold',
     color: '#1E293B',
+  },
+  syncBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    backgroundColor: 'rgba(10, 74, 109, 0.08)',
+  },
+  syncBtnText: {
+    color: colors.primary,
+    fontSize: 13,
+    fontWeight: '700',
   },
   loaderContainer: {
     flex: 1,
@@ -209,16 +259,26 @@ const styles = StyleSheet.create({
     flex: 1,
     marginRight: 8,
   },
-  completedBadge: {
-    backgroundColor: 'rgba(16, 185, 129, 0.08)',
+  badge: {
     paddingVertical: 4,
     paddingHorizontal: 8,
     borderRadius: 6,
   },
+  syncedBadge: {
+    backgroundColor: 'rgba(16, 185, 129, 0.08)',
+  },
+  pendingBadge: {
+    backgroundColor: 'rgba(245, 158, 11, 0.12)',
+  },
   badgeText: {
-    color: colors.safe,
     fontSize: 9,
     fontWeight: '800',
+  },
+  syncedText: {
+    color: colors.safe,
+  },
+  pendingText: {
+    color: '#D97706',
   },
   tripDate: {
     fontSize: 12,

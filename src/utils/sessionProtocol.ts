@@ -19,6 +19,8 @@ export function createGroupInvitation(group: Group, ttlMs = 30 * 60 * 1000): Gro
     sessionId: group.sessionId,
     joinToken: group.joinToken,
     expiresAt: Date.now() + ttlMs,
+    ...(group.networkName ? { networkName: group.networkName } : {}),
+    ...(group.passphrase ? { passphrase: group.passphrase } : {}),
   };
 }
 
@@ -43,7 +45,15 @@ export function parseGroupInvitation(value: string, now: number = Date.now()): G
       parsed.sessionId.length > MAX_TEXT_LENGTH ||
       parsed.joinToken.length > MAX_TEXT_LENGTH
     ) return null;
-    return parsed as GroupInvitation;
+
+    const networkName = typeof parsed.networkName === 'string' && parsed.networkName.length <= MAX_TEXT_LENGTH ? parsed.networkName : undefined;
+    const passphrase = typeof parsed.passphrase === 'string' && parsed.passphrase.length <= MAX_TEXT_LENGTH ? parsed.passphrase : undefined;
+
+    return {
+      ...parsed,
+      ...(networkName ? { networkName } : {}),
+      ...(passphrase ? { passphrase } : {}),
+    } as GroupInvitation;
   } catch {
     return null;
   }

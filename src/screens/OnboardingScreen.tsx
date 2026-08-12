@@ -24,7 +24,7 @@ const slides = [
   {
     icon: '👥',
     title: 'Group Coordination',
-    desc: 'Send meetup points, coordinate plans, and stay connected with your travel companions.',
+    desc: 'Coordinate plans, share status, and stay connected with your travel companions.',
     gradient: ['#2ECC71', '#FF6B35'],
   },
   {

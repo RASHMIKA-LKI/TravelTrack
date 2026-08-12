@@ -257,18 +257,17 @@ export function TrackingScreen({ navigation }: any) {
             }
             if (role === 'leader' && user && group) {
               try {
-                await firestoreService.saveTripAndIncrementCount(user.uid, {
+                const savedTrip = await firestoreService.saveTripAndIncrementCount(user.uid, {
                   groupName: group.name,
                   startTime: group.createdAt,
                   endTime: Date.now(),
                   memberCount: members.filter((member) => member.id !== myDeviceId).length + 1,
                 });
+                if (savedTrip?.syncStatus === 'pending') {
+                  console.log('[TrackingScreen] Trip saved locally (offline). Queued for cloud backup when online.');
+                }
               } catch (error) {
-                console.warn('Could not save completed trip:', error);
-                Alert.alert(
-                  'Trip History Not Saved',
-                  'Tracking has ended, but this trip could not be saved to the account. Check your connection before ending future trips.'
-                );
+                console.warn('Trip local save warning:', error);
               }
             }
             tcpSocketManager.disconnect();
@@ -605,14 +604,6 @@ export function TrackingScreen({ navigation }: any) {
             {/* Quick Actions Panel */}
             <View style={styles.quickActionsContainer}>
               <TouchableOpacity
-                style={styles.meetupActionBtn}
-                onPress={handleSendMeetup}
-              >
-                <Text style={styles.actionBtnIcon}>📌</Text>
-                <Text style={styles.actionBtnText}>Send Meetup</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
                 style={styles.sosActionBtn}
                 onPress={() => setActiveTab('emergency')}
               >
@@ -664,7 +655,6 @@ export function TrackingScreen({ navigation }: any) {
             <View style={styles.inputContainer}>
               <View style={styles.inputLeftIcons}>
                 <TouchableOpacity style={styles.inputIconBtn}><Text style={styles.inputIcon}>😊</Text></TouchableOpacity>
-                <TouchableOpacity style={styles.inputIconBtn}><Text style={styles.inputIcon}>📍</Text></TouchableOpacity>
               </View>
               <TextInput
                 style={styles.chatTextInput}
@@ -1297,33 +1287,14 @@ const styles = StyleSheet.create({
     color: '#64748B',
   },
   quickActionsContainer: {
-    flexDirection: 'row',
     paddingHorizontal: 20,
-    gap: 16,
     marginTop: 8,
-  },
-  meetupActionBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    backgroundColor: '#ffffff',
-    borderWidth: 1.5,
-    borderColor: '#0A4A6D',
-    paddingVertical: 16,
-    borderRadius: 14,
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 8,
   },
   actionBtnIcon: {
     fontSize: 18,
   },
-  actionBtnText: {
-    color: '#0A4A6D',
-    fontSize: 15,
-    fontWeight: '700',
-  },
   sosActionBtn: {
-    flex: 1,
+    width: '100%',
     flexDirection: 'row',
     backgroundColor: '#EF4444',
     paddingVertical: 16,

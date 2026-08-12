@@ -68,6 +68,8 @@ export interface Group {
   joinToken: string;
   leaderDeviceAddress?: string;
   leaderIp?: string;
+  networkName?: string;
+  passphrase?: string;
 }
 
 export interface GroupInvitation {
@@ -77,6 +79,8 @@ export interface GroupInvitation {
   sessionId: string;
   joinToken: string;
   expiresAt: number;
+  networkName?: string;
+  passphrase?: string;
 }
 
 export interface InterruptedSession {

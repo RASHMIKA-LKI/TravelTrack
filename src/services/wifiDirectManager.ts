@@ -14,8 +14,10 @@
 // exist. Every method guards on isDemoMode() so demo sessions never touch P2P.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { PermissionsAndroid, Platform } from 'react-native';
+import { NativeModules, PermissionsAndroid, Platform } from 'react-native';
 import { isDemoMode } from '../utils/isDemoMode';
+
+const { WifiP2pCredentials } = NativeModules;
 
 // The Wi-Fi Direct Group Owner always gets this IP on Android.
 export const LEADER_IP = '192.168.49.1';
@@ -289,27 +291,32 @@ class WifiDirectManager {
       pollTimer = setInterval(async () => {
         try { acceptConnectionInfo(await p2pCall('getConnectionInfo')); } catch (_) {}
       }, 600);
+
       const requestConnection = async () => {
         try {
-          // Do not force group-owner intent: the selected leader has already
-          // created the group, and Android can join it using the normal API.
           await p2pCall('connect', deviceAddress);
         } catch (firstError) {
-          // Android sometimes keeps a previous cancelled request in-flight.
-          // Clear it once, wait for the framework, and retry this same peer.
-          try { await p2pCall('cancelConnect'); } catch (_) {}
-          await sleep(900);
-          await p2pCall('connect', deviceAddress);
+          await sleep(1000);
+          try {
+            await p2pCall('connect', deviceAddress);
+          } catch (retryError) {
+            console.warn('Wi-Fi Direct connect retry warning:', retryError);
+          }
         }
       };
 
-      void requestConnection()
-        .then(() => console.log('🔄 Wi-Fi Direct connect request sent. Waiting for group to form...'))
-        .catch((error: any) => {
-          if (settled) return;
-          settled = true;
-          cleanup();
-          reject(new Error(`Could not start the Wi-Fi Direct connection. ${error?.message || ''}`.trim()));
+      // Check immediately if device is ALREADY connected to the leader's group
+      p2pCall('getConnectionInfo')
+        .then((initialInfo) => {
+          if (initialInfo?.groupFormed) {
+            acceptConnectionInfo(initialInfo);
+            return;
+          }
+          try { p2pCall('stopDiscoveringPeers').catch(() => {}); } catch (_) {}
+          void requestConnection();
+        })
+        .catch(() => {
+          void requestConnection();
         });
 
       timeoutTimer = setTimeout(() => {
@@ -319,6 +326,96 @@ class WifiDirectManager {
           reject(new Error(
             'Connection timed out (25s). Make sure both devices have Wi-Fi on and the leader tapped "Start Hosting Group".'
           ));
+        }
+      }, 25_000);
+    });
+  }
+
+  async getGroupCredentials(): Promise<{ networkName: string; passphrase: string } | null> {
+    if (isDemoMode() || Platform.OS !== 'android' || !WifiP2pCredentials?.getGroupCredentials) {
+      return null;
+    }
+    try {
+      const creds = await WifiP2pCredentials.getGroupCredentials();
+      if (creds && typeof creds.networkName === 'string') {
+        console.log('🔑 Retrieved Wi-Fi Direct group credentials:', creds.networkName);
+        return {
+          networkName: creds.networkName,
+          passphrase: creds.passphrase || '',
+        };
+      }
+    } catch (e) {
+      console.warn('Could not fetch group credentials from native module:', e);
+    }
+    return null;
+  }
+
+  async connectByCredentials(networkName: string, passphrase: string): Promise<string> {
+    if (isDemoMode()) return LEADER_IP;
+
+    if (Platform.OS !== 'android' || !WifiP2pCredentials?.connectByCredentials) {
+      throw new Error('Credential-based Wi-Fi Direct joining is only supported on Android.');
+    }
+
+    const apiLevel = typeof Platform.Version === 'number' ? Platform.Version : parseInt(Platform.Version as string, 10);
+    if (apiLevel < 29) {
+      throw new Error('Direct credential joining requires Android 10 (API 29) or higher.');
+    }
+
+    if (this.scanInterval) {
+      clearInterval(this.scanInterval);
+      this.scanInterval = null;
+    }
+    this.peersSubscription = this.removeSub(this.peersSubscription);
+    this.connectionSubscription = this.removeSub(this.connectionSubscription);
+
+    return new Promise<string>((resolve, reject) => {
+      let settled = false;
+      let pollTimer: ReturnType<typeof setInterval> | null = null;
+      let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
+      const cleanup = () => {
+        this.connectionSubscription = this.removeSub(this.connectionSubscription);
+        if (pollTimer) clearInterval(pollTimer);
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+      };
+
+      const acceptConnectionInfo = (info: any) => {
+        if (settled || !info?.groupFormed) return;
+        settled = true;
+        cleanup();
+        const reportedIp = info.groupOwnerAddress?.hostAddress;
+        const leaderIp = reportedIp && reportedIp !== '0.0.0.0' ? reportedIp : LEADER_IP;
+        console.log(`✅ Wi-Fi Direct group joined by credentials! Leader IP: ${leaderIp}`);
+        resolve(leaderIp);
+      };
+
+      const p2pMod = getP2P();
+      const mod = p2pMod.default || p2pMod;
+      this.connectionSubscription = mod.subscribeOnConnectionInfoUpdates((info: any) => {
+        console.log('Connection info update (credentials):', JSON.stringify(info));
+        acceptConnectionInfo(info);
+      });
+
+      pollTimer = setInterval(async () => {
+        try { acceptConnectionInfo(await p2pCall('getConnectionInfo')); } catch (_) {}
+      }, 600);
+
+      WifiP2pCredentials.connectByCredentials(networkName, passphrase)
+        .then(() => {
+          console.log('🔄 Wi-Fi Direct credential connect request sent. Waiting for group connection...');
+        })
+        .catch((error: any) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          reject(new Error(`Could not connect using group credentials: ${error?.message || ''}`.trim()));
+        });
+
+      timeoutTimer = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          cleanup();
+          reject(new Error('Credential connection timed out (25s). Make sure Wi-Fi is enabled on both devices and Leader is hosting.'));
         }
       }, 25_000);
     });

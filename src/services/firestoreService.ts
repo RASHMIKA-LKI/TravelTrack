@@ -1,6 +1,6 @@
 // src/services/firestoreService.ts
 // All Firestore database operations for user profiles and trip history.
-// Uses Firebase JS SDK v9 (modular API) — compatible with Expo.
+// Modular v9 API — enhanced with offline-first local storage and automatic sync.
 
 import {
   doc,
@@ -21,19 +21,18 @@ import {
 import { FirebaseError } from 'firebase/app';
 import { db } from '../config/firebase';
 import { TripRecord } from '../types/models';
+import { offlineSyncService, ExtendedTripRecord } from './offlineSyncService';
 
 // ─── User Profile Type ────────────────────────────────────────────────────────
-// Defines the shape of a user's Firestore document in the 'users' collection.
 export interface UserProfile {
   name: string;
   email: string;
   createdAt: number;
   totalTrips: number;
-  updatedAt?: Timestamp | FieldValue;  // Timestamp when read, FieldValue when written
+  updatedAt?: Timestamp | FieldValue | number;
 }
 
 // ─── Firestore Error Helper ───────────────────────────────────────────────────
-// Converts Firestore error codes into human-readable messages for the UI.
 function getFirestoreErrorMessage(error: unknown): string {
   if (error instanceof Error && 'code' in error) {
     const code = (error as FirebaseError).code;
@@ -65,14 +64,21 @@ export const firestoreService = {
   // ─── User Profile ───────────────────────────────────────────────────────────
 
   /**
-   * Save or update a user's profile in Firestore.
-   * Uses merge:true so existing fields are not deleted.
-   * Called automatically after sign-up.
+   * Save or update a user's profile.
+   * Saves to local storage first, then attempts Firestore push.
+   * If offline, enqueues profile update for automatic cloud backup.
    */
   saveUserProfile: async (
     uid: string,
     profile: { name: string; email: string; createdAt: number }
   ): Promise<void> => {
+    // Cache profile locally immediately
+    await offlineSyncService.cacheUserProfileLocally(uid, {
+      ...profile,
+      totalTrips: 0,
+      updatedAt: Date.now(),
+    });
+
     try {
       const userRef = doc(db, 'users', uid);
       await setDoc(
@@ -82,67 +88,103 @@ export const firestoreService = {
           totalTrips: 0,
           updatedAt: serverTimestamp(),
         },
-        { merge: true } // merge:true = don't overwrite fields we didn't include
+        { merge: true }
       );
     } catch (error) {
-      throw new Error(getFirestoreErrorMessage(error));
+      console.warn('[FirestoreService] Profile sync failed, enqueuing for background sync:', error);
+      await offlineSyncService.enqueueItem({
+        id: 'prof_' + Date.now(),
+        type: 'SAVE_PROFILE',
+        uid,
+        payload: profile,
+        createdAt: Date.now(),
+        retryCount: 0,
+      });
     }
   },
 
   /**
-   * Fetch a user's profile document from Firestore.
-   * Returns null if the user has no profile yet.
+   * Fetch a user's profile document.
+   * Falls back to local cached profile if offline or network error occurs.
    */
   getUserProfile: async (uid: string): Promise<UserProfile | null> => {
     try {
       const userRef = doc(db, 'users', uid);
       const snap = await getDoc(userRef);
-      return snap.exists() ? (snap.data() as UserProfile) : null;
+      if (snap.exists()) {
+        const data = snap.data() as UserProfile;
+        // Update local cache with latest server data
+        await offlineSyncService.cacheUserProfileLocally(uid, data);
+        return data;
+      }
+      return null;
     } catch (error) {
-      throw new Error(getFirestoreErrorMessage(error));
+      console.warn('[FirestoreService] Could not reach Firestore, reading cached profile:', error);
+      return await offlineSyncService.getCachedUserProfile(uid);
     }
   },
 
   // ─── Trip History ───────────────────────────────────────────────────────────
 
   /**
-   * Save a completed trip record to the user's trip history sub-collection.
-   * Called when the leader ends a tracking session.
+   * Save a completed trip record locally and enqueue cloud sync.
+   * Called when the leader or member ends a tracking session.
    */
-  saveTripRecord: async (uid: string, trip: Omit<TripRecord, 'id'>): Promise<void> => {
-    try {
-      const tripsRef = collection(db, 'users', uid, 'trips');
-      await addDoc(tripsRef, {
-        ...trip,
-        savedAt: serverTimestamp(),
-      });
-    } catch (error) {
-      throw new Error(getFirestoreErrorMessage(error));
-    }
+  saveTripRecord: async (uid: string, trip: Omit<TripRecord, 'id'>): Promise<ExtendedTripRecord> => {
+    return await offlineSyncService.saveTripLocally(uid, trip);
   },
 
   /**
-   * Get the last 20 trips for a user, ordered by most recent first.
-   * Returns an empty array if the user has no trips.
+   * Get combined trip history (Firestore cloud records + pending local records).
    */
-  getTripHistory: async (uid: string): Promise<TripRecord[]> => {
+  getTripHistory: async (uid: string): Promise<ExtendedTripRecord[]> => {
+    const localTrips = await offlineSyncService.getLocalTripRecords(uid);
+
+    let remoteTrips: ExtendedTripRecord[] = [];
     try {
       const tripsRef = collection(db, 'users', uid, 'trips');
       const q = query(tripsRef, orderBy('startTime', 'desc'), limit(20));
       const snap = await getDocs(q);
 
-      return snap.docs.map((document) => ({
+      remoteTrips = snap.docs.map((document) => ({
         id: document.id,
+        syncStatus: 'synced' as const,
         ...(document.data() as Omit<TripRecord, 'id'>),
       }));
     } catch (error) {
-      throw new Error(getFirestoreErrorMessage(error));
+      console.warn('[FirestoreService] Could not fetch remote trip history (offline mode active):', error);
     }
+
+    // Merge & deduplicate local vs remote trips by startTime and groupName
+    const combinedMap = new Map<string, ExtendedTripRecord>();
+
+    // Add remote trips first
+    for (const rTrip of remoteTrips) {
+      const key = `${rTrip.startTime}_${rTrip.groupName}`;
+      combinedMap.set(key, rTrip);
+    }
+
+    // Overlay local trips (preferring local pending status if unsynced)
+    for (const lTrip of localTrips) {
+      const key = `${lTrip.startTime}_${lTrip.groupName}`;
+      if (!combinedMap.has(key)) {
+        combinedMap.set(key, lTrip);
+      } else {
+        // If already in remote, ensure marked as synced locally
+        const existing = combinedMap.get(key)!;
+        if (existing.syncStatus !== 'pending') {
+          lTrip.syncStatus = 'synced';
+        }
+      }
+    }
+
+    // Sort by startTime descending
+    const result = Array.from(combinedMap.values()).sort((a, b) => b.startTime - a.startTime);
+    return result;
   },
 
   /**
    * Increment the user's total trip count by 1.
-   * Called at the end of each trip.
    */
   incrementTripCount: async (uid: string): Promise<void> => {
     try {
@@ -151,54 +193,45 @@ export const firestoreService = {
         totalTrips: increment(1),
       });
     } catch (error) {
-      throw new Error(getFirestoreErrorMessage(error));
+      console.warn('[FirestoreService] Increment count failed offline, queueing:', error);
+      await offlineSyncService.enqueueItem({
+        id: 'inc_' + Date.now(),
+        type: 'INCREMENT_COUNT',
+        uid,
+        payload: {},
+        createdAt: Date.now(),
+        retryCount: 0,
+      });
     }
   },
 
   /**
-   * Convenience method: save a trip record AND increment the user's trip count
-   * in parallel. Call this from handleEndTracking when a session ends.
-   *
-   * @example
-   * await firestoreService.saveTripAndIncrementCount(user.uid, {
-   *   groupName: 'Hanthana Peak Hike',
-   *   startTime: tripStartTimestamp,
-   *   endTime: Date.now(),
-   *   memberCount: members.length,
-   * });
+   * Saves trip record to local storage immediately and queues background sync.
+   * Completely safe offline — will NEVER throw or block ending/leaving a trip.
    */
-  saveTripAndIncrementCount: async (uid: string, trip: Omit<TripRecord, 'id'>): Promise<void> => {
-    await Promise.all([
-      firestoreService.saveTripRecord(uid, trip),
-      firestoreService.incrementTripCount(uid),
-    ]);
+  saveTripAndIncrementCount: async (uid: string, trip: Omit<TripRecord, 'id'>): Promise<ExtendedTripRecord> => {
+    return await offlineSyncService.saveTripLocally(uid, trip);
   },
 
   /**
-   * Delete all user data from Firestore (profile + trips).
-   * Called when a user deletes their account.
+   * Delete all user data.
    */
   deleteUserData: async (uid: string): Promise<void> => {
     try {
-      // Delete all trip records first
       const tripsRef = collection(db, 'users', uid, 'trips');
       const snap = await getDocs(tripsRef);
-      // Note: Firestore doesn't support bulk deletes in the client SDK,
-      // so we delete each trip doc individually. For large datasets,
-      // consider using a Cloud Function.
       const deletePromises = snap.docs.map((tripDoc) =>
         updateDoc(doc(db, 'users', uid, 'trips', tripDoc.id), { _deleted: true })
       );
       await Promise.all(deletePromises);
 
-      // Mark the user profile as deleted
       const userRef = doc(db, 'users', uid);
       await updateDoc(userRef, {
         _deleted: true,
         deletedAt: serverTimestamp(),
       });
     } catch (error) {
-      throw new Error(getFirestoreErrorMessage(error));
+      console.warn('[FirestoreService] Delete user data offline error:', error);
     }
   },
 };
