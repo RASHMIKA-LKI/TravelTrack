@@ -36,7 +36,8 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
-    "test:tracking": "node scripts/tracking-logic.test.cjs"
+    "test:tracking": "node scripts/tracking-logic.test.cjs",
+    "test:offline": "node scripts/offline-sync.test.cjs"
   },
   "private": true
 }

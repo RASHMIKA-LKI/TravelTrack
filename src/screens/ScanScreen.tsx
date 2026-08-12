@@ -10,10 +10,12 @@ import {
   Alert,
   StatusBar,
   Animated,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../theme/colors';
 import { useWifiDirect } from '../hooks/useWifiDirect';
+import { wifiDirectManager } from '../services/wifiDirectManager';
 import { useTrackingStore } from '../store/useTrackingStore';
 import { isDemoMode } from '../utils/isDemoMode';
 import { startDemo, DEMO_PEERS } from '../services/demoService';
@@ -30,7 +32,7 @@ export function ScanScreen({ navigation }: any) {
   const pulseAnim = React.useRef(new Animated.Value(1)).current;
   const qrLockedRef = useRef(false);
 
-  const { startScanning, connectToLeader } = useWifiDirect();
+  const { startScanning, connectToLeader, connectToLeaderByCredentials } = useWifiDirect();
   const setRole = useTrackingStore((state) => state.setRole);
   const pendingInvitation = useTrackingStore((state) => state.pendingInvitation);
   const setPendingInvitation = useTrackingStore((state) => state.setPendingInvitation);
@@ -61,9 +63,26 @@ export function ScanScreen({ navigation }: any) {
 
     setPendingInvitation(invitation);
 
-    // The QR code confirms the invitation but cannot safely contain a volatile
-    // Wi-Fi Direct MAC address. Show the discovered hosts and let the traveller
-    // choose the nearby leader instead of guessing from a model name.
+    // On Android 10+ (API 29+), if the scanned invitation contains Wi-Fi Direct
+    // group credentials (SSID networkName + passphrase), perform a direct join
+    // without requiring peer discovery scans.
+    const apiLevel = Platform.OS === 'android' ? (typeof Platform.Version === 'number' ? Platform.Version : parseInt(Platform.Version as string, 10)) : 0;
+    if (invitation.networkName && apiLevel >= 29 && connectToLeaderByCredentials) {
+      try {
+        setScanning(true);
+        await connectToLeaderByCredentials(invitation);
+        if (setRole) setRole('member');
+        setScanning(false);
+        navigation.navigate('GroupLobby', { isLeader: false, groupName: useTrackingStore.getState().group?.name || invitation.groupName });
+        return;
+      } catch (e: any) {
+        console.warn('Direct credential join failed, falling back to peer scan:', e);
+        setScanning(false);
+        qrLockedRef.current = false;
+      }
+    }
+
+    // Fallback: Show discovered hosts and let the traveller choose the nearby leader
     await startScan(true);
   };
 
@@ -145,6 +164,7 @@ export function ScanScreen({ navigation }: any) {
     // ──────────────────────────────────────────────────────────
 
     try {
+      await wifiDirectManager.stopScanning();
       if (connectToLeader) {
         if (!pendingInvitation) throw new Error('The invitation is missing or expired. Scan the leader QR code again.');
         await connectToLeader(device.deviceAddress, pendingInvitation);
